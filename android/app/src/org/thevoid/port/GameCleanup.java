@@ -76,7 +76,7 @@ final class GameCleanup {
         if (file.getParentFile().equals(root)) {
             if (name.equals("game.txt") || file.isDirectory() && (name.startsWith("lifted") || name.startsWith("game"))) return true;
             // These roots are read at runtime, including loose replacements and caches.
-            if (name.equals("bin") || name.equals("data") || name.equals("void") || name.equals("userdata")
+            if (name.equals("bin") || name.equals("data") || name.equals("void") || name.equals("userdata") || name.startsWith("userdata-")
                 || name.equals("overrides")
                 || name.equals("shadercache") || name.equals("cache") || name.equals(".git")
                 || name.equals(".nomedia") || name.equals("appdata") || name.equals("programdata")

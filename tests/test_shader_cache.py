@@ -20,6 +20,10 @@ def main():
     requests.mkdir(parents=True, exist_ok=True)
     results.mkdir(parents=True, exist_ok=True)
     variants = {name: (key, data) for name, key, data in shaders()}
+    for profile, expected in (("vs_2_0", "fc55f3ab80b9d89a"), ("vs_3_0", "1b62f585a4579324")):
+        shader, startup = variants["startup/position/" + profile]
+        assert shader == expected, (profile, shader)
+        (requests / (shader + ".req")).write_bytes(startup)
     # Observed on Pixel 10 when entering Ava's obscura, before this fix.
     key, data = variants["static/CompositeObscureAva/ps_3_0"]
     assert key == "db4e109751497ac9"
@@ -34,6 +38,8 @@ def main():
     (requests / (bad_keys[1] + ".req")).write_bytes(data[:-1])
     run = subprocess.run([str(build_tool()), str(requests), str(results)], capture_output=True, text=True)
     assert run.returncode == 0 and (results / (key + ".bin")).stat().st_size > 4, run.stdout + run.stderr
+    for profile in ("vs_2_0", "vs_3_0"):
+        assert (results / (variants["startup/position/" + profile][0] + ".bin")).stat().st_size > 4
     for name, (shader, _) in obscura.items():
         assert (results / (shader + ".bin")).stat().st_size > 4, name
     assert "truncated macros" in run.stderr and "truncated source" in run.stderr, run.stderr

@@ -13,6 +13,27 @@ import java.util.Map;
 final class Profile {
     private Profile() { }
 
+    /** Move the old shared profile into the chosen installation; existing destination files win. */
+    static void migrate(File from, File to) throws IOException {
+        if (java.nio.file.Files.isSymbolicLink(from.toPath()) || java.nio.file.Files.isSymbolicLink(to.toPath()))
+            throw new IOException("linked profile path: " + from + " -> " + to);
+        from = from.getCanonicalFile();
+        to = to.getCanonicalFile();
+        if (from.equals(to) || !from.exists()) return;
+        if (to.toPath().startsWith(from.toPath()) || from.toPath().startsWith(to.toPath()))
+            throw new IOException("overlapping profile folders: " + from + " -> " + to);
+        if (!to.exists() && from.renameTo(to)) return;
+        if (from.isDirectory()) {
+            if (!to.isDirectory() && !to.mkdirs()) throw new IOException("cannot create " + to);
+            File[] files = from.listFiles();
+            if (files == null) throw new IOException("cannot read " + from);
+            for (File file : files) migrate(file, new File(to, file.getName()));
+            from.delete();   // Conflicting originals stay as a backup, never replace the selected profile.
+        } else if (!to.exists()) {
+            java.nio.file.Files.move(from.toPath(), to.toPath());
+        }
+    }
+
     /** The renderer's configuration as Config.exe writes it (RendererD3D reads
      *  an HDR node: absent off, simple="1" simplified, without it full). */
     static void writeRenderer(File dir, int width, int height, Settings s) {

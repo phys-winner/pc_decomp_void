@@ -30,6 +30,7 @@ public final class GameCleanupTest {
         byte[] data = {1, 2, 3};
         String[] keep = {"bin/win32/Game.exe", "bin/win32/Video.dll", "data/info.xml", "data/Scenes.vfs",
             "data/Scenes/loose.bin", "Void/Cache/effects.hdr", "userdata/Documents/Savegames/a.bin",
+            "userdata-qa20261025/void.log", "userdata-qa20261025/shadercache/a.bin",
             "lifted/Engine.dll", "game-german/bin/win32/Game.exe", "game-german/data/info.xml", "overrides/patched.bin",
             "Other/Savegames/a.bin", "Other/user.cfg", "Other/settings.xml", "Documents/picture.png", "game.txt"};
         for (String name : keep) put(root, name, data);

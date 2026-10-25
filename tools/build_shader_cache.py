@@ -28,6 +28,15 @@ def request(source, profile, macros=b"", flags=0):
 
 
 def shaders():
+    # RendererD3D generates these before reading Effects/static.xml, even with an empty profile.
+    source = (b"struct VS_INPUT {\nfloat4 Position: POSITION;\n};\n\n"
+              b"float4x4 FullTransform: register(c0);\n\n"
+              b"float4 CalcPosition(const VS_INPUT inp) {\nreturn inp.Position;\n}\n\n"
+              b"float4 main(VS_INPUT inp): POSITION {\n{\n}\nreturn mul(CalcPosition(inp), FullTransform);\n}\n")
+    for profile in ("vs_2_0", "vs_3_0"):
+        macros = f"profile_{profile}=1\nprofile_vs=1\n".encode()
+        yield "startup/position/" + profile, *request(source, profile, macros, flags=0x8010)
+
     index = json.loads((ROOT / "research/vfs-index.json").read_text(encoding="utf-8"))
     entries = {entry["name"].lower(): (Path(index["source"]) / container["name"], entry)
                for container in index["containers"] for entry in container["entries"]}

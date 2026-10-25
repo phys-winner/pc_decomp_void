@@ -228,8 +228,11 @@ contains the lifted executable images and port patches; the game's full
 resources must be supplied separately.
 
 The first launch unpacks the selected native library and prepares caches.
-Writable profiles live under `/sdcard/TheVoid`; back up your saves before
-switching between independently signed builds.
+Saves, settings, logs and writable caches live in `userdata` inside the game
+folder selected in the launcher. Existing profiles under `/sdcard/TheVoid`
+move there at startup; destination files take priority, and conflicting
+originals remain in the old folder. Back up your saves before switching
+between independently signed builds.
 
 ADB deployment is optional and requires an explicitly selected device:
 

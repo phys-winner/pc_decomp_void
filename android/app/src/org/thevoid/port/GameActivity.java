@@ -7,7 +7,6 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.os.Environment;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -126,7 +125,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
          * while it is silent (loading, paused). */
         setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
         hideSystemUi();
-        base = new File(Environment.getExternalStorageDirectory(), "TheVoid");
         /* The launcher's folder (its extra, else the one it chose last; tools
          * start this activity directly). Without a game, the launcher. */
         File game = Launcher.chosenGame(this, getIntent());
@@ -135,6 +133,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             finish();
             return;
         }
+        base = game;
         start(new Release(game));
     }
 
@@ -213,7 +212,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         String userdata = getIntent() != null ? getIntent().getStringExtra("userdata") : null;
         if (userdata == null || !userdata.matches("userdata-[A-Za-z0-9_]+")) userdata = "userdata";
         File data = new File(base, userdata);
-        data.mkdirs();
         prepareAssets(release, data, root);
     }
 
@@ -223,6 +221,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         preparationPanel.post(preparationTick);
         preparation = new Thread(() -> {
             try {
+                Profile.migrate(new File(Launcher.baseDir(), data.getName()), data);
+                if (!data.isDirectory() && !data.mkdirs()) throw new java.io.IOException("cannot create " + data);
                 if (!libraryLoaded) {
                     /* Unpacked from the APK on the first start of a build; a pushed
                      * development library takes precedence (NativeLibrary). */
@@ -240,7 +240,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 ShaderCache.install(this, getFilesDir(), (done, total) -> { cacheCompleted = done; cacheTotal = total; });
                 if (Thread.currentThread().isInterrupted()) return;
                 preparationPhase = 2;
-                File images = Images.dir(this, base, release.images);
+                File images = Images.dir(this, Launcher.baseDir(), release.images);
                 if (Thread.currentThread().isInterrupted()) return;
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;

@@ -7,7 +7,7 @@ stream per 32 MiB chunk in assets/native (unpacked on the first start by
 lib/libvoidxz.so, NativeLibrary.java), with the PE images it was lifted from (assets/lifted, assets/lifted-<release>: Images.java
 copies them into the app's files unless /sdcard/TheVoid holds them, as
 tools/push_game_data.py puts them); the game's own files are where the
-launcher found or unpacked them, the writable profile in /sdcard/TheVoid.
+launcher found or unpacked them, the writable profile in that folder's userdata.
 --release-only packs one library (void for the 2009 build, or a release
 name such as tension); --java-only packs none and no images: the activity
 then loads the library pushed into its own files by --push-lib (run-as,

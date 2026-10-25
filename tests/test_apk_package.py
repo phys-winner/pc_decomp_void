@@ -12,6 +12,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from build_game_apk import OUT, TOOLS, run, sha256, xz_tool
+from build_shader_cache import shaders
 
 
 def elf(data):
@@ -53,6 +54,9 @@ def main():
         assert len(names) == len(set(names)), "duplicate APK entries"
         assert apk.read("assets/licenses/GPL-3.0.txt") == (ROOT / "LICENSE").read_bytes()
         assert apk.read("assets/licenses/THIRD_PARTY_NOTICES.md") == (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes()
+        cached = {line.split()[0] for line in apk.read("assets/shadercache/index.txt").decode().splitlines() if line.strip()}
+        for label, key, _ in shaders():
+            assert key + ".bin" in cached, "missing required shader: " + label + " (" + key + ")"
         libraries = {"libvoid.so": "arm64", "libvoid_tension.so": "arm64-tension"}
         # lib/ holds only the unpacker; the libraries are xz streams in assets/native.
         assert {n for n in names if n.startswith("lib/")} == {"lib/arm64-v8a/libvoidxz.so"}

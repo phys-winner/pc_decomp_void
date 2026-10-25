@@ -60,7 +60,7 @@ public final class Launcher extends Activity {
 
     private SharedPreferences prefs;
     private Settings settings;
-    private File base;   /* /sdcard/TheVoid: the player's profile, the development images */
+    private File base;   /* /sdcard/TheVoid: legacy copies and development images */
     private File game;   /* the chosen game's root; null: none yet */
     private final Handler handler = new Handler(Looper.getMainLooper());
     /* An archive between its choice and its unpacking. */
@@ -431,7 +431,10 @@ public final class Launcher extends Activity {
      * world\main_menu.bin reads from the game's settings (the player's copy,
      * which the game's options change too); the layer's preference makes
      * the copy's first value. */
-    private File gameSettings() { return new File(base, "userdata/overrides/settings.xml"); }
+    private File gameSettings() {
+        File selected = new File(game != null ? game : base, "userdata/overrides/settings.xml");
+        return selected.isFile() ? selected : new File(base, "userdata/overrides/settings.xml");
+    }
 
     private boolean skipIntro() {
         String v = Profile.prop(GameActivity.Release.read(gameSettings()), "PortSkipIntro");
