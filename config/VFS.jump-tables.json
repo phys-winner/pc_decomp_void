@@ -1,0 +1,100 @@
+[
+  {
+    "address": "0x1000e5b8",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000e6b4",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000e638",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000e6a4",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000e744",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000e7f0",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000e840",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x1000e530",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000f8b8",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000f9b4",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000f938",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000f9a4",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000fa44",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000faf0",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  },
+  {
+    "address": "0x1000fb40",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x1000f830",
+    "reason": "Verified CRT copy table: guarded alignment/forward-underflow/backward-negated domains and all targets inside the 0x365-byte source routine"
+  }
+]

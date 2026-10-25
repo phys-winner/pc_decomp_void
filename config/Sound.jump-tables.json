@@ -1,0 +1,108 @@
+[
+  {
+    "address": "0x10048008",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048104",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048088",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x100480f4",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048194",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048240",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048290",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10047f80",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048548",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048644",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x100485c8",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048634",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x100486d4",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x10048780",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x100487d0",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x100484c0",
+    "reason": "Verified 0x365-byte CRT copy routine: alignment, forward underflow and backward-negated index domains; all declared targets inside source routine"
+  },
+  {
+    "address": "0x100cc15e",
+    "first_index": 0,
+    "count": 64,
+    "source_function": "0x10065587",
+    "source_size": 1183,
+    "reason": "Verified FDIV opcode dispatcher: AND EAX,0x3F bounds index0..63; all64 nonzero targets lie inside the 0x49F-byte original routine"
+  }
+]

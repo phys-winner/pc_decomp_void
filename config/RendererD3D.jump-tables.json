@@ -1,0 +1,100 @@
+[
+  {
+    "address": "0x101240d8",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x101241d4",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x10124158",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x101241c4",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x10124264",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x10124310",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x10124360",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10124050",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a178",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a274",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a1f8",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a264",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a304",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a3b0",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  },
+  {
+    "address": "0x1012a400",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x1012a0f0",
+    "reason": "Verified 0x365-byte CRT copy layout: alignment, forward underflow and backward-negated domains; declared targets inside source routine"
+  }
+]

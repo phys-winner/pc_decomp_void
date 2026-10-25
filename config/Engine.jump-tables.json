@@ -1,0 +1,100 @@
+[
+  {
+    "address": "0x10074888",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10074984",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10074908",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10074974",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10074a14",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10074ac0",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10074b10",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10074800",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10076de8",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10076ee4",
+    "first_index": -4,
+    "count": 4,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10076e68",
+    "first_index": 0,
+    "count": 8,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10076ed4",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10076f74",
+    "first_index": 1,
+    "count": 3,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10077020",
+    "first_index": -7,
+    "count": 8,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  },
+  {
+    "address": "0x10077070",
+    "first_index": 0,
+    "count": 4,
+    "source_function": "0x10076d60",
+    "reason": "Verified CRT copy table: matching guarded domains and exact function-relative targets"
+  }
+]

@@ -1,0 +1,43 @@
+{
+  "pcrecomp": {
+    "url": "https://github.com/sp00nznet/pcrecomp.git",
+    "revision": "904ac3129d0c9d05efbeec19a1dce6abbe7f5d26",
+    "directory": "reference/pcrecomp",
+    "license": "MIT"
+  },
+  "mojoshader": {
+    "url": "https://github.com/icculus/mojoshader.git",
+    "revision": "cf2661bcb55d9a8732e86f79922592d7efdf5383",
+    "directory": "reference/mojoshader",
+    "license": "zlib",
+    "note": "Last revision with the assembler and preprocessor (removed in 7c3fbde); upstream checkout is unchanged. The build patches pixel-shader DCL semantics in a private copy (tools/build_android.py)."
+  },
+  "dlmalloc": {
+    "url": "https://gee.cs.oswego.edu/pub/misc/malloc.c",
+    "version": "2.8.6",
+    "sha256": "be7be56b40b4b31417e74e77687f9b96127ea6cae534cf236aee40a4c739508d",
+    "directory": "reference/dlmalloc",
+    "license": "MIT-0"
+  },
+  "stb": {
+    "url": "https://github.com/nothings/stb.git",
+    "revision": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+    "directory": "reference/stb",
+    "license": "public domain / MIT",
+    "note": "stb_vorbis.c (v1.22): Sound.dll's Vorbis decoding (android/host/vorbis_native.c); stb_image_write.h (v1.16): the game's screenshots (android/host/pictures.c); used unmodified"
+  },
+  "xz-embedded": {
+    "url": "https://github.com/tukaani-project/xz-embedded.git",
+    "revision": "ae63ae3a36ed01724674e8f3d750dc47bf125410",
+    "directory": "reference/xz-embedded",
+    "license": "0BSD",
+    "note": "v2024-12-30 (ARM64 BCJ): the APK's xz-packed native libraries are unpacked by android/unpack/unpack.c; used unmodified"
+  },
+  "libtheora": {
+    "url": "https://gitlab.xiph.org/xiph/theora.git",
+    "revision": "1bcbdce04664d96dfa280f259d4291b871e4cffe",
+    "directory": "reference/libtheora",
+    "license": "BSD-3-Clause",
+    "note": "v1.0, the version in Video.dll; lib/dec/idct.c used unmodified by android/host/theora_native.c"
+  }
+}

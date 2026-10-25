@@ -1,0 +1,24 @@
+{
+  "game_directory": "original/the-void-russian",
+  "physx_directory": "original/physx/2.8.1",
+  "d3dx_compiler": "original/d3dx9_36.dll",
+  "releases": {
+    "tension": {
+      "game_directory": "original/the-void-polish",
+      "physx_directory": "original/physx/2.7.3"
+    }
+  },
+  "game_exe": {
+    "original_sha256": "5e58f8183ce15110a21120e317c439af14b245e57f973ed274c3c4c27f3d21f2",
+    "recovered_sha256": "f37f82cec68cf2d4fabad1b47c3e3d22672e21feea33ab441acea6e48f78815f",
+    "catalog_source": "IDA 9.1, 1177 function entries, recovered Steam copy",
+    "catalog": "config/Game.functions.json"
+  },
+  "probe": {
+    "module": "Engine.dll",
+    "sha256": "bb7c9f554e1eb96ef11a99c2bddeb26e73de26680da7ce1a86acd3eb353c5061",
+    "va": 268606640,
+    "size": 45,
+    "contract": "EAX in 1..UINT32_MAX; returns floor(log2(EAX)); zero loops forever in the original"
+  }
+}

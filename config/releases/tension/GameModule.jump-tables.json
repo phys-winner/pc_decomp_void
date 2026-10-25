@@ -1,0 +1,4 @@
+[
+  {"address": "0x1014b248", "count": 80, "source_function": "0x10146f40",
+   "reason": "gscript VM opcode dispatch: 80 slots indexed by an unsigned byte with no bound check, 44/45 null (as 0x1014bf78 in the 2009 GameModule)"}
+]

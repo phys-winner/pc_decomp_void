@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.thevoid.port"
+    android:versionCode="2" android:versionName="0.1-dev">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+  <uses-feature android:glEsVersion="0x00030002" android:required="true" />
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <application android:label="The Void" android:icon="@mipmap/ic_launcher" android:debuggable="true"
+      android:allowBackup="false"
+      android:extractNativeLibs="true" android:requestLegacyExternalStorage="true" android:hasCode="true"
+      android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+    <activity android:name=".Launcher" android:exported="true"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+    <!-- Exported for the tools (am start -n org.thevoid.port/.GameActivity). -->
+    <activity android:name=".GameActivity" android:exported="true" android:screenOrientation="sensorLandscape"
+        android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|screenLayout|uiMode"
+        android:launchMode="singleTask" />
+    <activity android:name=".RestartActivity" android:exported="false" android:process=":restart"
+        android:excludeFromRecents="true" android:noHistory="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+    <service android:name=".UnpackService" android:exported="false" />
+  </application>
+</manifest>

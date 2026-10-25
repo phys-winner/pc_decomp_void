@@ -1,0 +1,33 @@
+{
+  "name": "tension",
+  "title": "Tension (Polish release, CD Projekt; 2008 build of the game)",
+  "game_directory": "original/the-void-polish",
+  "physx_directory": "original/physx/2.7.3",
+  "note": "Steam depot 37005 (polish). Game.exe ... NxCharacter.dll are the 2008 build (Engine requests PhysX SDK 2.7.3); the data is the 2008 game, not the 2009 'The Void'. PhysX 2.7.3 comes from the user's NVIDIA PhysX legacy system software.",
+  "modules": [
+    {"name": "Game", "prefix": "game", "file": "{game}/bin/win32/Game.exe", "base": "0x00400000",
+     "sha256": "b2d506efd89cdb179771b268214a40f4a8e52dcf7b514a515834459cca95f406"},
+    {"name": "GameModule", "prefix": "gamemodule", "file": "{game}/bin/win32/GameModule.dll", "base": "0x10000000",
+     "sha256": "ad535e5f2be2c283f5a043de50c8543614a7e3802bc374598c0202c1e0d2d17c"},
+    {"name": "Engine", "prefix": "engine", "file": "{game}/bin/win32/Engine.dll", "base": "0x11000000",
+     "sha256": "3e2b655fdf0dd2aef12b72d9a1c9f8e7d4fd9d09693dbf21d2ea52e4eab0b1b3"},
+    {"name": "FS", "prefix": "fs", "file": "{game}/bin/win32/FS.dll", "base": "0x12000000",
+     "sha256": "58d4cecfd868bb207d291af7607996e67450a4dfa583250ebb9a94adaa0ecbbe"},
+    {"name": "VFS", "prefix": "vfs", "file": "{game}/bin/win32/VFS.dll", "base": "0x13000000",
+     "sha256": "f251d59e78922bc301903da2a4136e47db3e3485e19ea26e4835f2a9b19f4931"},
+    {"name": "Sound", "prefix": "sound", "file": "{game}/bin/win32/Sound.dll", "base": "0x14000000",
+     "sha256": "08efe9908587e5f52f5dd84321259694204d79e1dd0c7f278420a973d3e27f02"},
+    {"name": "Video", "prefix": "video", "file": "{game}/bin/win32/Video.dll", "base": "0x15000000",
+     "sha256": "5419c0ceb31b0ec236353452403188d5c5463257092bbea61ba5341ce22f5ebd"},
+    {"name": "RendererD3D", "prefix": "renderer", "file": "{game}/bin/win32/RendererD3D.dll", "base": "0x16000000",
+     "sha256": "a0edd4d91fc37b3aeaad0d2dd06fb784c1e862c73fecea8ecd8d3671d81402bc"},
+    {"name": "NxCharacter", "prefix": "nxcharacter", "file": "{game}/bin/win32/NxCharacter.dll", "base": "0x17000000",
+     "sha256": "09217cd6657a5e29639de720101594d8d24f0540d91b3d5a1fded46e3ad15c64"},
+    {"name": "PhysXCore", "prefix": "physxcore", "base": "0x18000000",
+     "file": "{physx}/PhysXCore.dll",
+     "sha256": "6ee933831da916518ff979c8388cc4140873ef901e12ec15dfe1bcdd866419d7"},
+    {"name": "PhysXCooking", "prefix": "physxcooking", "base": "0x19000000",
+     "file": "{physx}/PhysXCooking.dll",
+     "sha256": "dbe5c451bffea7aab489f0ec927c3fb8a0fc87b78cf621b8df69ed01bb266b00"}
+  ]
+}

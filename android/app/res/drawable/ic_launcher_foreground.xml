@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A drop of Lymph and the seven colours around it (Silver, Crimson,
+     Amber, Azure, Violet, Emerald, Gold), inside the 66 dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+  <!-- Glow behind the drop. -->
+  <path android:fillColor="#2EC8102E" android:pathData="M54,38 m-19,18 a19,19 0 1,0 38,0 a19,19 0 1,0 -38,0" />
+  <path android:fillColor="#1FF2A900" android:pathData="M54,40 m-14,17 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+  <!-- The drop. -->
+  <path android:pathData="M54,30 C54,30 41,45.5 41,58.5 A13,13 0 0,0 67,58.5 C67,45.5 54,30 54,30 Z">
+    <aapt:attr name="android:fillColor">
+      <gradient android:type="linear" android:startX="54" android:startY="30" android:endX="54" android:endY="71.5"
+          android:startColor="#FFFFC94A" android:centerColor="#FFE0402A" android:endColor="#FF8E0B22" />
+    </aapt:attr>
+  </path>
+  <path android:fillColor="#59FFFFFF"
+      android:pathData="M48.5,52 C48.5,47 51.5,42.5 53,41 C52.2,44.5 51.6,48 51.6,52.5 C51.6,55.5 52.4,58 53.5,60 C51,59.6 48.5,56.5 48.5,52 Z" />
+  <!-- The seven colours; none at the top, where the drop points. -->
+  <path android:fillColor="#FFC9CDD6" android:pathData="M65.71,29.68 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+  <path android:fillColor="#FFD7263D" android:pathData="M80.32,47.99 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+  <path android:fillColor="#FFF29A1F" android:pathData="M75.10,70.84 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+  <path android:fillColor="#FF2F8CFF" android:pathData="M54.00,81.00 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+  <path android:fillColor="#FF9446E8" android:pathData="M32.90,70.84 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+  <path android:fillColor="#FF17B978" android:pathData="M27.68,47.99 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+  <path android:fillColor="#FFFFD23F" android:pathData="M42.29,29.68 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+</vector>
