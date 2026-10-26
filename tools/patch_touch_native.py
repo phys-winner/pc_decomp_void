@@ -1296,6 +1296,90 @@ def patch_body_memory_counts(module, lang):
                 memory_counts_carry=carry, memory_counts_reset=base)
 
 
+def patch_body_tutorial(module, lang):
+    """Keep the original manual Body lesson modal after a colour carry returns."""
+    original = list(module.instructions())
+    r = [x for x in original if not x.get('header')]
+
+    def body(start):
+        end = next((x['offset'] for x in original if x.get('header') and x['offset'] > start), len(module.code))
+        return [x for x in r if start < x['offset'] < end]
+
+    action = method(module, 'onInputAction')
+    if module.legacy:
+        # The 2008 close handlers already preserve their authored tutorial lock.
+        for name in ('onInputAction', 'onReturn', 'onWinKeyDown'):
+            assert any(x.get('text') == 'tutorial_end' for x in body(method(module, name)))
+        return dict(sites=[], tutorial_guard='original_2008')
+
+    close, = [x for x in body(action) if x['opcode'] == 67]
+    close_state, close_constructor = close['register'], close['operands'][0]
+    assert any(x.get('symbol') == 'destroy' for x in body(close_constructor))
+    entries = [(action, (-5, -4))]
+    for name in ('onReturn', 'onWinKeyDown'):
+        candidates = {m['code_offset'] for c in module.contexts for m in c['methods'] if m['name'] == name}
+        start, = [start for start in candidates if any(x['opcode'] == 67 and x['register'] == close_state
+                  and x['operands'] == [close_constructor, 0] for x in body(start))]
+        entries.append((start, () if name == 'onReturn' else (-5, -4)))
+    zone_return, = [x for x in r if x['opcode'] == 67 and x['register'] == close_state
+                    and x['operands'] == [close_constructor, 256] and any(
+                        m['name'] == 'onReturn' and m['code_offset'] < x['offset']
+                        and x in body(m['code_offset']) for c in module.contexts for m in c['methods'])]
+    # The original carry Escape path refunds the same colour, then restores the base state.
+    carry_keys = [m['code_offset'] for c in module.contexts for m in c['methods'] if m['name'] == 'onWinKeyDown'
+                  and any(x.get('symbol') == 'ZoneLimfa' for x in body(m['code_offset']))]
+    base, = {tuple((x['register'], x['operands'][0])) for start in carry_keys for x in body(start) if x['opcode'] == 67}
+    marker = len(module.types)
+    module.types += bytes([0])
+    sites, close_sites = [], []
+    init, demo = method(module, 'initUI'), method(module, 'initBodyDemonstration')
+    for start, value in ((init, False), (demo, True)):
+        # The existing initialization runs first; the marker is not a World/progress variable.
+        call = next(x for x in body(start) if x['opcode'] == 63)
+        site = call['offset'] + call['size']
+        a = Assembler(module)
+        a.emit(0, 0, value)
+        a.emit(13, 0, marker)
+        a.clear(0)
+        hook(module, site, a)
+        sites.append(hex(site))
+    for start, args in entries:
+        frame = next(x['frame_slots'] for x in original if x['offset'] == start)
+        a = Assembler(module)
+        a.emit(14, marker, frame)
+        a.emit(55, frame, 'normal')
+        a.clear(frame, *args)
+        a.emit(65)
+        a.label('normal')
+        a.clear(frame)
+        module.code[start + 4:start + 8] = p32(frame + 1)
+        hook(module, start + 8, a, max(8, body(start)[0]['size']))
+        close_sites.append(start + 8)
+        sites += [hex(start + 4), hex(start + 8)]
+    # Do not suppress this callback: the complete original refund and sound precede it.
+    zone_entry = max(x['offset'] for x in original if x.get('header') and x['offset'] < zone_return['offset'])
+    frame = next(x['frame_slots'] for x in original if x['offset'] == zone_entry)
+    a = Assembler(module)
+    a.emit(14, marker, frame)
+    a.emit(55, frame, 'normal')
+    a.clear(frame)
+    a.emit(67, base[0], base[1], 256)
+    a.emit(54, 0, zone_return['offset'] + zone_return['size'])
+    a.label('normal')
+    a.clear(frame)
+    module.code[zone_entry + 4:zone_entry + 8] = p32(frame + 1)
+    hook(module, zone_return['offset'], a, zone_return['size'])
+    sites += [hex(zone_entry + 4), hex(zone_return['offset'])]
+    return dict(sites=sites, tutorial_guard='per_body_window', marker_global=marker,
+                init_ui_site=int(sites[0], 16), demo_site=int(sites[1], 16),
+                init_ui_entry=init, demo_entry=demo,
+                demo_initializer=next(x['operands'][0] for x in body(demo) if x['opcode'] == 63),
+                close_entries=[start for start, _ in entries], close_sites=close_sites,
+                zone_return_entry=zone_entry, zone_return_site=zone_return['offset'],
+                normal_state=base[0], base_constructor=base[1],
+                zone_return_original_state=close_state, zone_return_original_constructor=close_constructor)
+
+
 def patch_harvest_stop(module, lang):
     instructions = list(module.instructions())
     r = rows(module)
@@ -1348,6 +1432,7 @@ PATCHES = [('Scripts\\ui\\hud.bin', patch_context_helpers), ('Scripts\\player.bi
            ('Scripts\\ui\\body.bin', patch_body_sources),
            ('Scripts\\ui\\body.bin', patch_body_details),
            ('Scripts\\ui\\body.bin', patch_body_memory_counts),
+           ('Scripts\\ui\\body.bin', patch_body_tutorial),
            ('Scripts\\ui\\main_menu.bin', patch_menu_map_hint),
            ('Scripts\\ui\\database.bin', patch_journal_video),
            ('Scripts\\ui\\health_progress.bin', patch_body_progress),

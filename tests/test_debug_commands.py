@@ -24,7 +24,7 @@ array = java.split("COMMANDS = {", 1)[1].split("};", 1)[0]
 commands = [json.loads('"' + text + '"').split()[0].lstrip("/") for text in re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', array)]
 assert len(commands) == len(set(commands)), "duplicate commands"
 assert set(commands) == original_commands | {"setvar", "getvar", "setting", "save_settings", "broadcast", "string", "gamma"}
-print(f"{len(original_commands)} original script commands, 7 native commands and 35 map locations PASS")
+print(f"{len(original_commands)} original script commands, 7 native commands and 26 selectable map locations PASS")
 
 JAVA = Path(os.environ.get("JAVA_HOME", "")) / "bin"
 ANDROID = Path(os.environ.get("ANDROID_SDK", os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or Path.home() / "AppData/Local/Android/Sdk")) / "platforms/android-36/android.jar"

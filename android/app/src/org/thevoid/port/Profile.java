@@ -40,8 +40,11 @@ final class Profile {
         StringBuilder x = new StringBuilder("﻿<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n<Renderer>\r\n");
         x.append("\t<Width>").append(width).append("</Width>\r\n");
         x.append("\t<Height>").append(height).append("</Height>\r\n");
-        if (s.hdr == 1) x.append("\t<HDR simple=\"1\" />\r\n");
-        else if (s.hdr == 2) x.append("\t<HDR />\r\n");
+        if (s.hdr != 0) x.append(s.hdr == 1 ? "\t<HDR simple=\"1\" />\r\n" : "\t<HDR />\r\n");
+        // Explicit original strategies keep every quality choice in the two
+        // shipped SM3 material families, including simplified HDR.
+        x.append("\t<Profile force=\"").append(s.hdr == 0 ? "fx_3_0" : s.hdr == 1 ? "fx_3_0hs" : "fx_3_0hf")
+            .append("\" />\r\n");
         x.append("\t<RefreshRate>0</RefreshRate>\r\n\t<Antialiasing>0</Antialiasing>\r\n");
         x.append("\t<Anisotropy>").append(s.anisotropy).append("</Anisotropy>\r\n");
         x.append("\t<LightmapQuality>").append(s.lightmapQuality).append("</LightmapQuality>\r\n");

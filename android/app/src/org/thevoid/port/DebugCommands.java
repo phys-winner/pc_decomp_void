@@ -36,6 +36,18 @@ final class DebugCommands {
 
     static int[] levelIds() { return Settings.legacyGame ? DebugLevelsTension.IDS : LEVEL_IDS; }
 
+    static String[] extraLabels() { return Settings.legacyGame ? DebugLevelsTension.EXTRA_LABELS : DebugLevels.EXTRA_LABELS; }
+
+    static String[] levelCommands(int index) {
+        int[] ids = levelIds();
+        if (index < ids.length) return new String[] {"/go " + ids[index]};
+        return (Settings.legacyGame ? DebugLevelsTension.EXTRA_COMMANDS : DebugLevels.EXTRA_COMMANDS)[index - ids.length].clone();
+    }
+
+    static void selectLevel(int index, Consumer<String[]> execute) {
+        execute.accept(levelCommands(index));
+    }
+
     static String[] commands() {
         if (!Settings.legacyGame) return COMMANDS;
         java.util.ArrayList<String> commands = new java.util.ArrayList<>();
@@ -49,9 +61,10 @@ final class DebugCommands {
         return commands.toArray(new String[0]);
     }
 
-    static void show(Activity activity, Consumer<String> execute) {
+    static void show(Activity activity, Consumer<String[]> execute) {
         AlertDialog[] owner = new AlertDialog[1];
-        Consumer<String> dispatch = value -> { owner[0].dismiss(); execute.accept(value); };
+        Consumer<String[]> dispatch = value -> { owner[0].dismiss(); execute.accept(value); };
+        Consumer<String> single = value -> dispatch.accept(new String[] {value});
         LinearLayout content = new LinearLayout(activity);
         content.setOrientation(LinearLayout.VERTICAL);
         int pad = Math.round(14 * activity.getResources().getDisplayMetrics().density);
@@ -64,7 +77,7 @@ final class DebugCommands {
         physics.setText(words("Physical boundaries", "Физические границы", "Physikalische Grenzen", "Granice fizyczne"));
         physics.setOnClickListener(v -> new AlertDialog.Builder(activity)
             .setTitle(physics.getText()).setItems(new String[] {words("Show", "Показать", "Anzeigen", "Pokaż"),
-                words("Hide", "Скрыть", "Ausblenden", "Ukryj")}, (d, which) -> dispatch.accept("setvar show_physics " + (which == 0 ? "1" : "0")))
+                words("Hide", "Скрыть", "Ausblenden", "Ukryj")}, (d, which) -> single.accept("setvar show_physics " + (which == 0 ? "1" : "0")))
             .show());
         content.addView(physics);
         TextView label = new TextView(activity);
@@ -76,7 +89,7 @@ final class DebugCommands {
         String[] commands = commands();
         ListView list = new ListView(activity);
         list.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_list_item_1, commands));
-        list.setOnItemClickListener((parent, view, position, id) -> command(activity, dispatch, commands[position]));
+        list.setOnItemClickListener((parent, view, position, id) -> command(activity, single, dispatch, commands[position]));
         int height = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.48f);
         content.addView(list, new LinearLayout.LayoutParams(-1, height));
         owner[0] = new AlertDialog.Builder(activity).setTitle(words("Debug commands", "Отладочные команды", "Debug-Befehle", "Polecenia debugowania"))
@@ -84,17 +97,19 @@ final class DebugCommands {
         owner[0].show();
     }
 
-    static void showLevels(Activity activity, Consumer<String> execute) {
+    static void showLevels(Activity activity, Consumer<String[]> execute) {
         int[] ids = levelIds();
-        String[] labels = new String[ids.length];
-        for (int i = 0; i < labels.length; ++i) labels[i] = Settings.gameText(15 + ids[i]) + "  (" + ids[i] + ")";
+        String[] extra = extraLabels();
+        String[] labels = new String[ids.length + extra.length];
+        for (int i = 0; i < ids.length; ++i) labels[i] = Settings.gameText(15 + ids[i]) + "  (" + ids[i] + ")";
+        System.arraycopy(extra, 0, labels, ids.length, extra.length);
         new AlertDialog.Builder(activity).setTitle(words("Level selection", "Выбор уровня", "Level wählen", "Wybór poziomu"))
-            .setItems(labels, (d, which) -> execute.accept("/go " + ids[which]))
+            .setItems(labels, (d, which) -> selectLevel(which, execute))
             .setNegativeButton(words("Cancel", "Отмена", "Abbrechen", "Anuluj"), null).show();
     }
 
-    private static void command(Activity activity, Consumer<String> execute, String usage) {
-        if (usage.startsWith("/go ")) { showLevels(activity, execute); return; }
+    private static void command(Activity activity, Consumer<String> execute, Consumer<String[]> route, String usage) {
+        if (usage.startsWith("/go ")) { showLevels(activity, route); return; }
         String[] parts = usage.split(" +");
         argument(activity, execute, usage, parts, 1, parts[0]);
     }

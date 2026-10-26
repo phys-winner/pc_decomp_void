@@ -1,6 +1,7 @@
 #define RECOMP_GENERATED_CODE
 #include "runtime-fixture.h"
 #include <assert.h>
+#include <setjmp.h>
 
 uint32_t g_eax,g_ecx,g_edx,g_ebx,g_esp,g_ebp,g_esi,g_edi,g_fs_base,g_gs_base,g_cur_func;
 ptrdiff_t g_mem_base;
@@ -25,6 +26,7 @@ const uint32_t recomp_dispatch_count=0;
 #define BOX (BASE+0x7000u)
 #define OBB (BASE+0x8000u)
 static unsigned char memory[65536],initial_memory[65536],wanted_memory[65536];
+static uint32_t engine_epsilon=0x3f7fffefu,renderer_epsilon=0x3f7fffefu;
 static void *guest_address(uint32_t va) {
     /* CONSTANTS */
     assert(va>=BASE && va<BASE+sizeof memory);
@@ -39,6 +41,9 @@ void sub_16125DCB(void) {
     fp_push(ldexp(value,exponent)); g_eax=0x12345678; g_ecx=0x23456789; g_edx=0x3456789a;
     g_flag_k=FK_ADD; g_flag_a=123; g_flag_b=456; g_flag_cf=0; g_esp+=4;
 }
+static jmp_buf engine_entry;
+static unsigned engine_intercept,engine_lifted_entries,engine_global_entries;
+static unsigned renderer_lifted_entries,renderer_global_entries;
 /* HELPERS */
 /* ORIGINAL */
 

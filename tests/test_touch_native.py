@@ -166,6 +166,19 @@ int main(void) {
     void_touch_gameplay_options(50,NAN); assert(chosen_veins==3);
     assert(!void_touch_console(NULL) && !void_touch_console(""));
     assert(!void_touch_console("/go 1\n/god") && !void_touch_console("/go 1\r/god"));
+    const char *quality_settings[] = {"Shadows", "PortHDR", "PortLightmapQuality"};
+    for (unsigned i=0; i<3; ++i) {
+        char quality_command[100];
+        for (unsigned value=0; value<3; ++value) {
+            snprintf(quality_command,sizeof quality_command,"setting %s %u",quality_settings[i],value);
+            command_count=0;
+            assert(void_touch_console(quality_command) && !strcmp(commands[0],quality_command));
+        }
+        snprintf(quality_command,sizeof quality_command,"setting %s",quality_settings[i]);
+        command_count=0;
+        assert(void_touch_console(quality_command) && !strcmp(commands[0],quality_command));
+    }
+    command_count=0;
     char long_command[513]; memset(long_command,'a',512); long_command[512]=0;
     assert(!void_touch_console(long_command));
     long_command[511]=0; assert(void_touch_console(long_command));

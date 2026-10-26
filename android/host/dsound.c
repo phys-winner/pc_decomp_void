@@ -11,6 +11,7 @@
 #include "touch_native.h"
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
 
 #define DS_OK 0u
 #define DSERR_INVALIDPARAM 0x80070057u
@@ -175,6 +176,7 @@ static void mix_chunk(float *mix, uint32_t frames)
 static void *mixer_main(void *arg)
 {
     (void)arg;
+    void_host_thread_init();
     float mix[2 * MIX_CHUNK];
     int16_t out[2 * MIX_CHUNK];
     struct timespec next;
@@ -188,7 +190,7 @@ static void *mixer_main(void *arg)
         mix_chunk(mix, MIX_CHUNK);
         if (dstrace && ++ticks % 500 == 0)
             for (dsbuf_t *b = buffers; b; b = b->next)
-                if (b->playing) DSTRACE("tick %u: buffer %08X at %u of %u", ticks, b->com.guest, b->play_pos, b->size);
+                if (b->playing) DSTRACE("tick %u: buffer %08X at %u of %u volume %d pan %d 3d %u pos %g,%g,%g min %g max %g listener %g,%g,%g distance %g rolloff %g", ticks, b->com.guest, b->play_pos, b->size, b->volume, b->pan, (b->flags & DSBCAPS_CTRL3D) != 0, b->pos[0], b->pos[1], b->pos[2], b->min_distance, b->max_distance, listener_pos[0], listener_pos[1], listener_pos[2], distance_factor, rolloff);
         pthread_mutex_unlock(&mix_lock);
         for (int i = 0; i < 2 * MIX_CHUNK; ++i) {
             float v = mix[i] * 32767.0f;
@@ -309,8 +311,7 @@ COM_METHOD(dsb, Lock, 8)
     if (flags & 1u) offset = b->play_pos;                 /* DSBLOCK_FROMWRITECURSOR */
     if (flags & 2u) bytes = b->size;                      /* DSBLOCK_ENTIREBUFFER */
     if (offset >= b->size || bytes > b->size) return DSERR_INVALIDPARAM;
-    if (dstrace && (b->locks < 4 || !(b->locks & 63)))
-        DSTRACE("buffer %08X lock #%u offset %u bytes %u flags %X (play %u)", b->com.guest, b->locks, offset, bytes, flags, b->play_pos);
+    DSTRACE("buffer %08X lock #%u offset %u bytes %u flags %X (play %u)", b->com.guest, b->locks, offset, bytes, flags, b->play_pos);
     ++b->locks;
     uint32_t first = bytes <= b->size - offset ? bytes : b->size - offset;
     MEM32(ARG(3)) = b->data + offset;
@@ -423,7 +424,20 @@ static void_com_class ds3d_class = { "IDirectSound3DBuffer8", 21, ds3d_methods, 
 COM_METHOD(lst, QueryInterface, 3) { return buffer_query(B3, ARG(1), ARG(2)); }
 COM_METHOD(lst, AddRef, 1) { return void_com_addref(&B3->com); }
 COM_METHOD(lst, Release, 1) { return void_com_release(&B3->com); }
-COM_METHOD(lst, GetAllParameters, 2) { memset(GPTR(ARG(1) + 4), 0, 60); return DS_OK; }
+COM_METHOD(lst, GetAllParameters, 2)
+{
+    uint32_t p = ARG(1);
+    if (!p || MEM32(p) != 64) return DSERR_INVALIDPARAM;
+    memset(GPTR(p + 4), 0, 60);
+    memcpy(GPTR(p + 4), listener_pos, 12);
+    memcpy(GPTR(p + 28), listener_front, 12);
+    memcpy(GPTR(p + 40), listener_top, 12);
+    memcpy(GPTR(p + 52), &distance_factor, 4);
+    memcpy(GPTR(p + 56), &rolloff, 4);
+    float one = 1.0f;
+    memcpy(GPTR(p + 60), &one, 4);
+    return DS_OK;
+}
 COM_METHOD(lst, GetDistanceFactor, 2) { memcpy(GPTR(ARG(1)), &distance_factor, 4); return DS_OK; }
 COM_METHOD(lst, GetDopplerFactor, 2) { float one = 1.0f; memcpy(GPTR(ARG(1)), &one, 4); return DS_OK; }
 COM_METHOD(lst, GetOrientation, 3) { memcpy(GPTR(ARG(1)), listener_front, 12); memcpy(GPTR(ARG(2)), listener_top, 12); return DS_OK; }
@@ -433,11 +447,12 @@ COM_METHOD(lst, GetVelocity, 2) { memset(GPTR(ARG(1)), 0, 12); return DS_OK; }
 COM_METHOD(lst, SetAllParameters, 3)
 {
     uint32_t p = ARG(1);
+    if (!p || MEM32(p) != 64) return DSERR_INVALIDPARAM;
     memcpy(listener_pos, GPTR(p + 4), 12);
-    memcpy(&distance_factor, GPTR(p + 28), 4);
-    memcpy(&rolloff, GPTR(p + 32), 4);
-    memcpy(listener_front, GPTR(p + 40), 12);
-    memcpy(listener_top, GPTR(p + 52), 12);
+    memcpy(listener_front, GPTR(p + 28), 12);
+    memcpy(listener_top, GPTR(p + 40), 12);
+    memcpy(&distance_factor, GPTR(p + 52), 4);
+    memcpy(&rolloff, GPTR(p + 56), 4);
     return DS_OK;
 }
 COM_METHOD(lst, SetDistanceFactor, 3) { distance_factor = fval(ARG(1)); return DS_OK; }
@@ -576,7 +591,9 @@ WINAPI_ORDINAL("dsound.dll", DirectSoundCreate8, 11, 3)
 {
     dsound_t *d = (dsound_t *)calloc(1, sizeof *d);
     const char *trace = getenv("VOID_DSOUND_TRACE");
-    dstrace = trace && *trace == '1';
+    char trace_path[1024];
+    snprintf(trace_path, sizeof trace_path, "%s/dsound-trace", void_data_dir());
+    dstrace = (trace && *trace == '1') || access(trace_path, F_OK) == 0;
     MEM32(ARG(1)) = void_com_wrap(&d->com, &dsound_class, 0);
     void_log("[dsound] DirectSoundCreate8 = %08X", MEM32(ARG(1)));
     return DS_OK;

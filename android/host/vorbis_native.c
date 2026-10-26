@@ -258,6 +258,7 @@ static void par_work(par_job *j)
 static void *pool_main(void *arg)
 {
     (void)arg;
+    void_host_thread_init();
     uint64_t seen = 0;
     pthread_mutex_lock(&pool_lock);
     for (;;) {

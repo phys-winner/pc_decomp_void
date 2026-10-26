@@ -104,7 +104,7 @@ public final class VTouch {
         }
         MotionEvent e = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, n, props, coords, 0, 0, 1f, 1f,
                 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
-        inject.invoke(manager, e, 2);   /* INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH */
+        inject.invoke(manager, e, 1);   /* WAIT_FOR_RESULT: a slow UI must not lengthen the gesture's event times. */
         e.recycle();
     }
 }

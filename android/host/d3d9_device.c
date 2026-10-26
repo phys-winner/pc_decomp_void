@@ -4,6 +4,7 @@
 #include <math.h>
 
 d3d_device *g_d3d_device;
+extern uint32_t d3d_constant_generation;
 
 
 /* What Direct3D 9 answered on the Windows PC (NVIDIA GeForce RTX 4060, see
@@ -229,6 +230,7 @@ static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static void default_state(d3d_device *dev, d3d_state *s)
 {
     memset(s, 0, sizeof *s);
+    ++d3d_constant_generation;   /* Reset clears the register files cached by programs. */
     uint32_t *rs = s->rs;
     rs[7] = dev->pp[9] ? 1 : 0;   /* ZENABLE follows EnableAutoDepthStencil */
     rs[8] = 3; rs[9] = 2; rs[14] = 1; rs[16] = 1; rs[19] = 2; rs[20] = 1; rs[22] = 3; rs[23] = 4;
@@ -1041,7 +1043,6 @@ COM_METHOD(dev, GetVertexShader, 2)
     return D3D_OK;
 }
 
-extern uint32_t d3d_constant_generation;
 #define CONST_SET(field, rec, limit, width) do { \
     d3d_device *d = DEV; d3d_state *s = target_state(d); \
     uint32_t start = ARG(1), data = ARG(2), count = ARG(3); \

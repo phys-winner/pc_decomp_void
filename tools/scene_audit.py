@@ -439,13 +439,13 @@ def ui_feed_script(data, cases, helpers=None):
     return module.encode()
 
 
-def guard_script(data):
+def guard_script(data, legacy=False):
     """Intercept one explicit command through the original bound dispatcher.
 
     Keep every context, method, variable and original frame size unchanged.
     The guard can execute only after the live runner requests /audit_guard.
     """
-    module = Module(data)
+    module = Module(data, legacy=legacy)
     entry = method(module, "onConsoleCommand") + 8
     a = Assembler(module)
     a.move(-5, 0)
@@ -907,6 +907,7 @@ def load_map(device, save, timeout):
         time.sleep(.5)
     if not reached_map:
         raise RuntimeError("copied base save did not reach the map")
+    raise RuntimeError("copied base save reached the map, but /audit_guard was not acknowledged")
     raise RuntimeError("original-world survival guard probe did not run; push probes after launch while still at the main menu, before loading the copied save")
 
 
@@ -1271,7 +1272,7 @@ def main():
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--script-probes", type=Path, help="Export QA-only Sister/hunter key probes and explicit World guard; never package them")
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--serial", required=True)
+    parser.add_argument("--serial")
     parser.add_argument("--profile", default="userdata-audit20261019")
     parser.add_argument("--save", default="5.sav")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -1296,6 +1297,8 @@ def main():
         args.manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"{len(manifest['cases'])} shipped scene cases -> {args.manifest}")
         return
+    if not args.serial:
+        parser.error("--serial is required for device checks")
     if not math.isfinite(args.seconds) or args.seconds < 10 or args.load_timeout < 15 or not re.fullmatch(r"[\w.-]+", args.save):
         parser.error("at least ten seconds per scene, fifteen seconds load timeout, and a plain copied save name required")
     all_cases = manifest["cases"] + manifest["brother_conversations"] + manifest["extra_cases"]

@@ -45,7 +45,8 @@ import java.util.Map;
  *          and the body turns with the right one; a list of saves scrolls,
  *          the journal's texts follow the finger pixel by pixel), pinch =
  *          the mouse wheel in small steps, two-finger swipes = the wheel's
- *          notches (in the journal its pixels, no pinch);
+ *          notches (in the journal its pixels, no pinch); three-finger tap
+ *          centres the map on the hero;
  *   PAINT  the brush is on (L Ctrl held): the picture is a canvas, a stroke
  *          is the left button with the cursor under the finger.
  * A button shows only where pressing it does something (the game's scripts
@@ -651,6 +652,7 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
 
     private boolean route(MotionEvent e) {
         int action = e.getActionMasked();
+        if (e.getPointerCount() > 3) touch.uiFingers = 4;
         if (action == MotionEvent.ACTION_DOWN) fingers.clear();
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             int i = e.getActionIndex();
@@ -718,7 +720,12 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
         alphaTime = now;
         overlayAlpha = idle <= 20000 ? Math.min(1f, overlayAlpha + elapsed / 500f)
             : Math.min(overlayAlpha, Math.max(0f, 1f - (idle - 20000) / 5000f));
-        for (View view : new View[] {buttonLayer, systemColumn, actionColumn, timeRow, picker, memoryPicker}) view.setAlpha(overlayAlpha);
+        buttonLayer.setAlpha(overlayAlpha);
+        systemColumn.setAlpha(overlayAlpha);
+        actionColumn.setAlpha(overlayAlpha);
+        timeRow.setAlpha(overlayAlpha);
+        picker.setAlpha(overlayAlpha);
+        memoryPicker.setAlpha(overlayAlpha);
         /* The menus' names of their glyphs stay (they are the menu's, not controls). */
         touch.setAlpha(screen == S_MAIN || screen == S_PAUSE ? 1f : overlayAlpha);
     }
@@ -1445,12 +1452,20 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
     }
 
     void runDebugCommand(String command) {
+        runDebugCommands(new String[] {command});
+    }
+
+    void runDebugCommands(String[] commands) {
         while (panelVisible()) closePanel();
         releaseAll();
         if (screen == S_PAUSE || shown(HUD_PAUSE, 700)) in.tapKey(Input.ESC);
         handler.postDelayed(() -> {
-            if (!GameActivity.nativeConsoleCommand(command))
-                android.widget.Toast.makeText(getContext(), "Command rejected: " + command, android.widget.Toast.LENGTH_LONG).show();
+            for (String command : commands) {
+                if (!GameActivity.nativeConsoleCommand(command)) {
+                    android.widget.Toast.makeText(getContext(), "Command rejected: " + command, android.widget.Toast.LENGTH_LONG).show();
+                    break;
+                }
+            }
         }, 180);
     }
 
@@ -2022,6 +2037,8 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
         private float lastTapX, lastTapY;
         private boolean dragging, longFired, twoFinger, listScroll, heartProgressHeld;
         private boolean twoMoved;   /* the two fingers zoomed, scrolled or moved */
+        private int uiFingers, uiId3 = -1;
+        private float threeDownX, threeDownY;
         private boolean bodyStatsHeld, bodyDragPending, bodyLymphaHeld;
         private boolean bodyReleasePending, bodyTransferHeld;
         private int bodyTransferColour = -1;
@@ -2504,6 +2521,8 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
             if (clickDown != null) { removeCallbacks(clickDown); clickDown.run(); }
             if (clickUp != null) { removeCallbacks(clickUp); clickUp.run(); }
             lookId = uiId = uiId2 = -1;
+            uiFingers = 0;
+            uiId3 = -1;
             colourId = cancelFinger = -1;
             twoFinger = false;
             invalidate();
@@ -3140,7 +3159,40 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
             }
         }
 
+        private boolean threeFingerTap(MotionEvent e) {
+            int a = e.getActionMasked(), idx = e.getActionIndex();
+            if (a == MotionEvent.ACTION_DOWN) {
+                uiFingers = 1;
+                uiId3 = -1;
+                return false;
+            }
+            if (a == MotionEvent.ACTION_POINTER_DOWN) {
+                uiFingers = Math.max(uiFingers, e.getPointerCount());
+                if (uiFingers == 3 && uiId3 < 0 && uiId >= 0 && uiId2 >= 0) {
+                    uiId3 = e.getPointerId(idx);
+                    threeDownX = e.getX(idx);
+                    threeDownY = e.getY(idx);
+                } else if (uiFingers >= 3) twoMoved = true;
+            }
+            if (uiFingers < 3) return false;
+            for (int i = 0; i < e.getPointerCount(); ++i) {
+                int id = e.getPointerId(i);
+                float x = id == uiId ? uiDownX : id == uiId2 ? twoDownX : threeDownX;
+                float y = id == uiId ? uiDownY : id == uiId2 ? twoDownY : threeDownY;
+                if ((id != uiId && id != uiId2 && id != uiId3)
+                        || Math.hypot(e.getX(i) - x, e.getY(i) - y) > slop()) twoMoved = true;
+            }
+            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                boolean locate = a == MotionEvent.ACTION_UP && screen == S_MAP && uiFingers == 3
+                    && !twoMoved && !longFired && e.getEventTime() - uiDownTime < 450;
+                cancel();
+                if (locate) startCentring();
+            }
+            return true;
+        }
+
         private void ui(MotionEvent e) {
+            if (threeFingerTap(e)) return;
             int a = e.getActionMasked(), idx = e.getActionIndex(), id = e.getPointerId(idx);
             float w = getWidth(), h = getHeight();
             if (tracker[0] == null) tracker[0] = android.view.VelocityTracker.obtain();

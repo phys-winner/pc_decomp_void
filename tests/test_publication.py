@@ -60,7 +60,7 @@ def main():
     env = os.environ.copy()
     for name in ("ANDROID_SERIAL", "VOID_SERIAL", "JAVA_HOME"):
         env.pop(name, None)
-    for args, message in ((["--install"], "deployment requires --serial"), (["--java-only"], "set JAVA_HOME")):
+    for args, message in ((["--install"], "--serial or VOID_SERIAL is required"), (["--java-only"], "set JAVA_HOME")):
         result = subprocess.run([sys.executable, "-B", str(ROOT / "tools/build_game_apk.py"), *args],
                                 cwd=ROOT, env=env, capture_output=True, text=True)
         assert result.returncode == 2 and message in result.stderr, result.stderr

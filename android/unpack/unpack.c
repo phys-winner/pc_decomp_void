@@ -1,7 +1,7 @@
 /* The game's native libraries travel in the APK as xz (LZMA2 behind the
  * ARM64 branch filter, tools/build_game_apk.py): less than half the size
  * deflate gives them, since the lifted code repeats far beyond deflate's
- * 32 KiB window. A library is cut into chunks (32 MiB) packed as streams
+ * 32 KiB window. A library is cut into chunks (sized by the APK index) packed as streams
  * of their own, one after another in its asset: the chunks unpack at once
  * on all cores, each straight into its place in the mapped library file
  * (single-call mode: the output is the dictionary, no other memory). This

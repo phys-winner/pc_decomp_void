@@ -174,7 +174,10 @@ static void decode_blocks(int conv, const uint8_t *src, uint32_t width, uint32_t
                     uint32_t px = bx * 4 + x;
                     if (px >= width) break;
                     uint8_t *d = dst + ((size_t)py * width + px) * channels;
-                    for (uint32_t c = 0; c < channels; ++c) d[c] = texels[y * 4 + x][c];
+                    const uint8_t *s = texels[y * 4 + x];
+                    if (channels == 4) memcpy(d, s, 4);
+                    else if (channels == 2) memcpy(d, s, 2);
+                    else d[0] = s[0];
                 }
             }
         }

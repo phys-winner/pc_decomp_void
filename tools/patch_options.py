@@ -155,8 +155,6 @@ def pages(t):
          Slider("PortHDR", t["hdr"], 2, kind="list", values=[0, 1, 2], names=[t["off"], t["simple"], t["full"]])],
         [Slider("PortAnisotropy", t["aniso"], 16, kind="list", values=[0, 2, 4, 8, 16],
                 names=[t["off"], "2x", "4x", "8x", "16x"]),
-         # The configurator's LightmapQuality: 0 high .. 2 low; the slider
-         # runs from low to high as the others grow to the right.
          Slider("PortLightmapQuality", t["light"], 0, kind="list", values=[2, 1, 0],
                 names=[t["low"], t["medium"], t["high"]]),
          Check("PortTextureQuality", t["textures"], True, on="0", off="1"),
@@ -823,6 +821,8 @@ def build_click(module, s, page, ctors, contexts):
 
 
 def patch_options(module, lang):
+    if module.legacy:
+        return dict(sites=[])
     texts = TEXTS.get(lang, TEXTS["en"])
     s = Sites(module)
     original = bytes(module.code)

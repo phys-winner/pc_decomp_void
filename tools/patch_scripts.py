@@ -48,6 +48,8 @@ import shutil
 import struct
 import sys
 from pathlib import Path
+import re
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -208,8 +210,8 @@ def patch_skip_intro(module, lang):
     names = ["main_menu_new_game", "main_menu_load_game", "main_menu_save_game",
              "main_menu_save_game_disabled", "main_menu_options", "main_menu_credits",
              "main_menu_return_to_game", "main_menu_exit_game"]
-    from generate_debug_levels import catalog
-    map_ids = catalog("research/vfs-index.polish.json" if module.legacy else "research/vfs-index.json", names=False)[0]
+    from generate_debug_levels import menu_catalog
+    map_ids = menu_catalog("research/vfs-index.polish.json" if module.legacy else "research/vfs-index.json", names=False)[0]
     strings = list(enumerate(list(range(20009, 20016)) + names))
     strings += [(15 + number, 1000 + number) for number in map_ids]
     for index, name in strings:
@@ -508,6 +510,16 @@ TOUCH_TEXTS = {
                "options_menu_mouse_sensitivity": "Blickempfindlichkeit",
                "options_menu_mouse_smoothing": "Blickglättung"},
     },
+    "Properties\\Strings\\tutorial.txt": {
+        "ru": {5001: "Удерживайте Лазурь в Памяти справа (%s) до смены подсказки.",
+               5002: "Отпустите палец и коснитесь кружка над пустым Сердцем."},
+        "en": {5001: "Hold the Azure drop in Memory on the right (%s) until this hint changes.",
+               5002: "Lift your finger, then tap the circle over an empty Heart to transfer the Color."},
+        "de": {5001: "Halte den Azur-Tropfen rechts im Gedächtnis (%s), bis sich dieser Hinweis ändert.",
+               5002: "Lass los und tippe dann auf den Kreis über einem leeren Herz, um die Farbe zu übertragen."},
+        "pl": {5001: "Przytrzymaj błękitną kroplę w Pamięci po prawej (%s), aż zmieni się wskazówka.",
+               5002: "Podnieś palec, a potem dotknij kółka nad pustym Sercem, aby przenieść Barwę."},
+    },
 }
 
 
@@ -527,12 +539,17 @@ LOOSE_PATCHES = [
 
 def patch_named_strings(data, names):
     """A string table (UTF-16 LE, a BOM, CRLF): the value line after each
-    "@nstring <name>" of names replaced, every other byte kept."""
+    named or numbered entry in names replaced, every other byte kept."""
     assert data[:2] == b"\xff\xfe"
     lines = data[2:].decode("utf-16-le").split("\r\n")
     done = set()
+    base = 0
     for i, line in enumerate(lines[:-1]):
+        if line.startswith("@base "):
+            base = int(line[len("@base "):])
         key = line[len("@nstring "):] if line.startswith("@nstring ") else None
+        if line.startswith("@string "):
+            key = base + int(line[len("@string "):])
         if key in names:
             lines[i + 1] = names[key]
             done.add(key)
@@ -672,8 +689,42 @@ def combined_patch(original, touch):
 
 from patch_touch_native import PATCHES as TOUCH_PATCHES  # noqa: E402
 from patch_readability import PATCHES as READABILITY_PATCHES  # noqa: E402
+from patch_debug_locations import patch_debug_locations  # noqa: E402
+from patch_poema_audio import poema_overrides  # noqa: E402
 
-for name, patch in TOUCH_PATCHES + READABILITY_PATCHES:
+
+# These empty RU/EN actors were removed in the shipped DE2009 scenes.
+GARDEN_ORPHANS = {
+    "trunk": "7d6eeed4c9effa657b8b69c6b00dde972fd2a6f8e8cf8879984538fe38e15d72",
+    "trunkbright": "630b0f456a1e07e0177f1da22749010cb97268dd24bc898dec4b7b103ffd0155",
+}
+
+
+def patch_garden_orphan_trigger(data, scene, binary_size):
+    assert hashlib.sha256(data).hexdigest() == GARDEN_ORPHANS[scene]
+    match, = list(re.finditer(rb'(?m)^\t\t<Actor Type="trigger" Name="t_butterfly_trunk"[^\n]*\n.*?^\t\t</Actor>\n', data, re.S))
+    actor = ET.fromstring(match.group())
+    assert actor.attrib == dict(Type="trigger", Name="t_butterfly_trunk", BinOffset=str(binary_size))
+    assert [child.tag for child in actor] == ["Physics", "Script", "Transform"]
+    physics = actor.find("Physics")
+    assert not physics.attrib and not list(physics)
+    assert actor.find("Script").attrib == {"Filename": "trigger/t_butterfly_" + scene}
+    # Its EOF BinOffset contains no scene-binary payload; keep every other byte.
+    return data[:match.start()] + data[match.end():]
+
+
+def garden_scene_overrides(index_path):
+    index = json.loads((ROOT / index_path).read_text(encoding="utf-8"))
+    for scene, source_sha in GARDEN_ORPHANS.items():
+        name = "Scenes\\Garden\\" + scene + ".xml"
+        original = read_entry(index_path, name)
+        if original is None or hashlib.sha256(original).hexdigest() != source_sha:
+            continue
+        binary = "Scenes\\Garden\\" + scene + ".s"
+        binary_size, = [e["size"] for c in index["containers"] for e in c["entries"] if e["name"] == binary]
+        yield name, original, patch_garden_orphan_trigger(original, scene, binary_size)
+
+for name, patch in TOUCH_PATCHES + READABILITY_PATCHES + [('Scripts\\world\\world.bin', patch_debug_locations)]:
     match = next((i for i, (path, _) in enumerate(PATCHES) if path.lower() == name.lower()), None)
     if match is None:
         PATCHES.append((name, patch))
@@ -687,13 +738,33 @@ def main():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
     entries = []
-    # The early HUD has no redundant captions; its options use the Java panel.
+    # The early options keep the Java panel; original video/shadow controls stay.
     legacy_patches = [(path, patch) for path, patch in PATCHES
-                      if path not in ('Scripts\\ui\\hud.bin', 'Scripts\\ui\\main_menu.bin')]
+                      if path != 'Scripts\\ui\\hud.bin']
     for index_path, lang in INDEXES.items():
         if not (ROOT / index_path).is_file():
             continue
         legacy = lang == "pl"
+        for name, original, payload in garden_scene_overrides(index_path):
+            sha = hashlib.sha256(original).hexdigest()
+            if any(e["original_sha256"] == sha and e["path"] == name for e in entries):
+                continue
+            out = OUT / sha / name.replace("\\", "/")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(payload)
+            entries.append(dict(path=name, original_sha256=sha, original_size=len(original),
+                                file=f"{sha}/{name.replace(chr(92), '/')}", sha256=hashlib.sha256(payload).hexdigest(),
+                                index=index_path, scene_fix="Remove the empty missing-script trigger absent from the original DE2009 scene"))
+        for name, source_name, original, payload in poema_overrides(index_path):
+            sha = hashlib.sha256(original).hexdigest()
+            if any(e["original_sha256"] == sha and e["path"] == name for e in entries):
+                continue
+            out = OUT / sha / name.replace("\\", "/")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(payload)
+            entries.append(dict(path=name, source=source_name, original_sha256=sha, original_size=len(original),
+                                file=f"{sha}/{name.replace(chr(92), '/')}", sha256=hashlib.sha256(payload).hexdigest(),
+                                index=index_path, audio_fix="Uta mono ambience has a unique name; original PCM unchanged"))
         for name, patch in legacy_patches if legacy else PATCHES:
             data = read_entry(index_path, name)
             if data is None:
@@ -760,6 +831,10 @@ def main():
                                 file=f"{sha}/{name.replace(chr(92), '/')}", sha256=hashlib.sha256(payload).hexdigest(),
                                 index=index_path, **info))
             print(f"{index_path}: {name} from {source_name} {sha[:12]} -> {info}")
+    # English scripts share the 2009 bytecode; its localized text has its own hash.
+    for index_path, lang in {**INDEXES, 'research/vfs-index.english.json': 'en'}.items():
+        if not (ROOT / index_path).is_file():
+            continue
         for name, by_lang in TOUCH_TEXTS.items():
             data = read_entry(index_path, name)
             if data is None or lang not in by_lang:

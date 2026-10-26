@@ -5,12 +5,15 @@ allowed by a '>profile' entry. Results use android/host/d3dx9.c's exact key
 and join build/shadercache/results, which build_game_apk.py packages.
 """
 import json
+import hashlib
 from pathlib import Path
 import struct
 import subprocess
 from xml.etree import ElementTree as ET
 
 from shader_service import ROOT, WORK, build_tool
+
+TUTORIAL_DIR = ROOT / "config/tutorial-shaders"
 
 
 def hash64(data):
@@ -27,7 +30,25 @@ def request(source, profile, macros=b"", flags=0):
     return f"{key:016x}", header + source
 
 
+def tutorial_shaders():
+    """Captured SM3 tutorial variants absent from the static effects list."""
+    manifest = json.loads((TUTORIAL_DIR / "manifest.json").read_text(encoding="utf-8"))
+    for shader in manifest["shaders"]:
+        key, data = request((TUTORIAL_DIR / shader["source"]).read_bytes(), manifest["profile"],
+                            manifest["macros"].encode("ascii"), manifest["flags"])
+        assert key == shader["key"], "Tutorial shader inputs changed: " + shader["source"]
+        yield "tutorial/" + key, key, data
+
+
+def verify_tutorial_bytecode(results):
+    manifest = json.loads((TUTORIAL_DIR / "manifest.json").read_text(encoding="utf-8"))
+    for shader in manifest["shaders"]:
+        data = (results / (shader["key"] + ".bin")).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == shader["bytecode_sha256"], shader["key"]
+
+
 def shaders():
+    yield from tutorial_shaders()
     # RendererD3D generates these before reading Effects/static.xml, even with an empty profile.
     source = (b"struct VS_INPUT {\nfloat4 Position: POSITION;\n};\n\n"
               b"float4x4 FullTransform: register(c0);\n\n"
@@ -87,6 +108,7 @@ def main():
     absent = [key for key in manifest.values() if not (results / (key + ".bin")).is_file()]
     if absent:
         raise SystemExit(completed.stdout + completed.stderr + f"\nMissing bytecode: {absent}")
+    verify_tutorial_bytecode(results)
     (WORK / "all-static.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     obscura = sorted({hash64((results / (key + ".bin")).read_bytes()) for name, key in manifest.items()
                       if name.startswith("static/CompositeObscure")})

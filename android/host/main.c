@@ -6,6 +6,7 @@
 #include "input.h"
 #include <dirent.h>
 #include <errno.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -63,6 +64,21 @@ static void seed_file(const char *dir, const char *name, const char *content)
     void_log("[void] seeded %s", path);
 }
 
+/* SM3 is forced by Profile.writeRenderer and advertised by the D3D caps.
+ * Keep both plain and HDR SM3 libraries for every graphics-quality choice,
+ * custom shaders and every shader-stage DB. Unknown files are preserved. */
+static int seed_cache_file(const char *name)
+{
+    static const char *const unused[] = {
+        "effects20.dat", "effects20.hdr", "effects20h.dat", "effects20h.hdr",
+        "effects2a.dat", "effects2a.hdr", "effects2ah.dat", "effects2ah.hdr",
+        "effects2b.dat", "effects2b.hdr", "effects2bh.dat", "effects2bh.hdr",
+    };
+    for (size_t i = 0; i < sizeof unused / sizeof *unused; ++i)
+        if (!strcasecmp(name, unused[i])) return 0;
+    return 1;
+}
+
 static int copy_tree(const char *from, const char *to)
 {
     DIR *d = opendir(from);
@@ -70,6 +86,8 @@ static int copy_tree(const char *from, const char *to)
     mkdir(to, 0775);
     struct dirent *e;
     int ok = 1;
+    const char *base = strrchr(from, '/');
+    int cache = !strcasecmp(base ? base + 1 : from, "Cache");
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         char a[1200], b[1200];
@@ -78,6 +96,7 @@ static int copy_tree(const char *from, const char *to)
         struct stat st;
         if (stat(a, &st)) continue;
         if (S_ISDIR(st.st_mode)) { ok &= copy_tree(a, b); continue; }
+        if (cache && !seed_cache_file(e->d_name)) continue;
         FILE *in = fopen(a, "rb"), *out = fopen(b, "wb");
         if (!in || !out) { ok = 0; if (in) fclose(in); if (out) fclose(out); continue; }
         char buf[1 << 16];
@@ -88,6 +107,35 @@ static int copy_tree(const char *from, const char *to)
     }
     closedir(d);
     return ok;
+}
+
+static void prune_legacy_material_cache(const char *dir)
+{
+    char marker[1200];
+    snprintf(marker, sizeof marker, "%s/.port-sm3-only-v1", dir);
+    if (!access(marker, F_OK)) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    int ok = 1, removed = 0;
+    for (;;) {
+        errno = 0;
+        e = readdir(d);
+        if (!e) { if (errno) ok = 0; break; }
+        if (seed_cache_file(e->d_name)) continue;
+        char path[1200];
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (!unlink(path)) ++removed;
+        else if (errno != ENOENT) ok = 0;
+    }
+    if (closedir(d)) ok = 0;
+    if (!ok) { void_log("[void] legacy material cache migration will retry"); return; }
+    FILE *f = fopen(marker, "wb");
+    if (f) {
+        int wrote = fputs("SM3; effects30+30h, custom and all stage databases retained\n", f) >= 0;
+        if (fclose(f) || !wrote) unlink(marker);
+    }
+    void_log("[void] SM3 material cache: %d unused SM2 files removed", removed);
 }
 
 /* The profile folders carry the game's English title from data/info.xml
@@ -131,15 +179,18 @@ static void seed_profile(const char *data)
         void_log("[void] installing %s -> %s", from, dir);
         if (!copy_tree(from, dir)) void_log("[void] copying the Void folder failed");
     }
+    snprintf(marker, sizeof marker, "%s/Cache", dir);
+    prune_legacy_material_cache(marker);
     snprintf(dir, sizeof dir, "%s/ProgramData/Ice-pick Lodge", data);
     mkdir(dir, 0775);
     snprintf(dir, sizeof dir, "%s/ProgramData/Ice-pick Lodge/%s", data, title);
     mkdir(dir, 0775);
     seed_file(dir, "rcfg.xml",
         "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n<Renderer>\r\n"
-        "\t<Width>1280</Width>\r\n\t<Height>720</Height>\r\n\t<HDR simple=\"1\" />\r\n"
+        "\t<Width>1280</Width>\r\n\t<Height>720</Height>\r\n\t<HDR />\r\n"
+        "\t<Profile force=\"fx_3_0hf\" />\r\n"
         "\t<RefreshRate>0</RefreshRate>\r\n\t<Antialiasing>0</Antialiasing>\r\n\t<Anisotropy>0</Anisotropy>\r\n"
-        "\t<LightmapQuality>2</LightmapQuality>\r\n\t<TextureQuality>1</TextureQuality>\r\n</Renderer>\r\n");
+        "\t<LightmapQuality>0</LightmapQuality>\r\n\t<TextureQuality>1</TextureQuality>\r\n</Renderer>\r\n");
     seed_file(dir, "scfg.xml",
         "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n<Sound>\r\n\t<Quality rate=\"44\" />\r\n</Sound>\r\n");
     seed_file(dir, "settings.xml",
@@ -147,7 +198,7 @@ static void seed_profile(const char *data)
         "  <prop name=\"Gamma\" value=\"1\" />\r\n  <prop name=\"InvertMouse\" value=\"0\" />\r\n"
         "  <prop name=\"MasterVolume\" value=\"0.8\" />\r\n  <prop name=\"MouseSensitivity\" value=\"1\" />\r\n"
         "  <prop name=\"MouseSmooth\" value=\"0\" />\r\n  <prop name=\"MusicVolume\" value=\"0.6\" />\r\n"
-        "  <prop name=\"Shadows\" value=\"1\" />\r\n  <prop name=\"SoundVolume\" value=\"0.8\" />\r\n"
+        "  <prop name=\"Shadows\" value=\"2\" />\r\n  <prop name=\"SoundVolume\" value=\"0.8\" />\r\n"
         "  <prop name=\"Subtitles\" value=\"1\" />\r\n  <prop name=\"VoiceVolume\" value=\"0.7\" />\r\n</Settings>\r\n");
 }
 

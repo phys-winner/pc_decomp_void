@@ -9,6 +9,7 @@ from patch_scripts import read_entry, patch_skip_intro
 from patch_touch_native import patch_body, patch_body_sources, patch_body_details
 from test_touch_native import VM
 from patch_database import patch_database
+from generate_debug_levels import menu_catalog, UNENTERABLE_HUNTER_GO_2009
 
 
 class Switch:
@@ -30,6 +31,11 @@ def main():
         assert "port_hint 7 custom menu main_menu_new_game" in published
         assert "port_hint 14 custom menu main_menu_exit_game" in published
         assert "port_hints_ready" in published
+        location_hints = {int(line.split()[1]) - 15 for line in published if line.startswith("port_hint ") and int(line.split()[1]) >= 15}
+        assert location_hints == set(menu_catalog(index)[0])
+        if not legacy:
+            assert not location_hints & set(UNENTERABLE_HUNTER_GO_2009)
+            assert 26 not in location_hints
         raw = read_entry(index, "Scripts\\ui\\body.bin")
         module = Module(raw, legacy=legacy)
         assert module.encode() == raw

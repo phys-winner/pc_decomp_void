@@ -74,8 +74,10 @@ for index, lang in INDEXES.items():
     specs = pages(TEXTS[lang])
     settings = {row.key: row for page in specs for column in page for row in column}
     assert not {"PortSkipIntro", "PortRunEdge", "PortTapTurn"}.intersection(settings)
-    for key, expected in {"PortRenderScale": 100, "PortHDR": 2, "PortAnisotropy": 16,
-                          "PortLightmapQuality": 0, "PortTextureQuality": True}.items():
+    assert settings["PortHDR"].values == [0, 1, 2]
+    assert settings["PortLightmapQuality"].values == [2, 1, 0]
+    for key, expected in {"PortRenderScale": 100, "PortHDR": 2, "PortLightmapQuality": 0,
+                          "PortAnisotropy": 16, "PortTextureQuality": True}.items():
         assert settings[key].default == expected, (key, settings[key].default)
     assert settings["PortDebugCommands"].default is False
     assert settings["PortTouchAdaptations"].default is True
@@ -96,9 +98,9 @@ for index, lang in INDEXES.items():
 source = (ROOT / "android/app/src/org/thevoid/port/Settings.java").read_text(encoding="utf-8")
 for key in ("PortFOV", "PortVeinBrightness", "PortDebugCommands", "PortTouchAdaptations", "PortShowMenuButton", "PortShowMenuLabels", "PortShowActionButton"):
     assert source.count('"' + key + '"') == 2, key
-for getter, key, value in [("getFloat", "renderScale", "1.0f"), ("getInt", "hdr", "2"),
+for getter, key, value in [("getFloat", "renderScale", "1.0f"),
                            ("getInt", "anisotropy", "16"), ("getInt", "textureQuality", "0"),
-                           ("getInt", "lightmapQuality", "0"), ("getInt", "soundRate", "44")]:
+                           ("getInt", "soundRate", "44")]:
     assert f'prefs.{getter}("{key}", {value})' in source, key
 assert settings["PortSoundRate"].default is True
 assert settings["PortSoundRate"].on == "44"

@@ -37,7 +37,9 @@ def elf(data):
 
 
 def main():
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT / "the-void.apk"
+    paths = [arg for arg in sys.argv[1:] if arg != "--no-publish"]
+    assert len(paths) <= 1, "expected at most one APK path"
+    path = Path(paths[0]) if paths else OUT / "the-void.apk"
     manifest = ET.parse(ROOT / "android/app/AndroidManifest.xml").getroot()
     ns = "{http://schemas.android.com/apk/res/android}"
     version, code = manifest.get(ns + "versionName"), manifest.get(ns + "versionCode")
@@ -79,9 +81,15 @@ def main():
             # Chunks of `chunk` bytes, one stream each, back to back (unpacked on all cores at once).
             chunk, packed = chunks[name]
             assert sum(packed) == info.file_size and len(packed) == -(-index[name][0] // chunk), "chunk table " + name
-            # Python's lzma has no ARM64 filter: the xz command decodes it (the streams in sequence).
-            unpacked = subprocess.run([xz_tool(), "--decompress", "--stdout"], input=apk.read(info.filename),
-                                      capture_output=True, check=True).stdout
+            # Decode each indexed stream independently, as the phone's workers do.
+            payload, offset, decoded = apk.read(info.filename), 0, []
+            for part, packed_size in enumerate(packed):
+                data = subprocess.run([xz_tool(), "--decompress", "--stdout"],
+                                      input=payload[offset:offset + packed_size], capture_output=True, check=True).stdout
+                assert len(data) == min(chunk, index[name][0] - part * chunk), "chunk output " + name
+                decoded.append(data)
+                offset += packed_size
+            unpacked = b"".join(decoded)
             assert (len(unpacked), hashlib.sha256(unpacked).hexdigest()) == index[name], "unpacked " + name
             original = elf((ROOT / "build" / folder / name).read_bytes())
             shipped = elf(unpacked)
@@ -114,9 +122,10 @@ def main():
         expected |= {p.relative_to(overrides).as_posix() for p in (overrides / "mobile-icons").rglob("*") if p.is_file()}
         assert {n.removeprefix("assets/overrides/") for n in names if n.startswith("assets/overrides/")} == expected, "stale override assets"
     published = ROOT / "pub" / f"the-void-{version}-{sha256(path)[:8]}.apk"
-    assert published.is_file() and sha256(published) == sha256(path), "published APK differs"
+    if "--no-publish" not in sys.argv:
+        assert published.is_file() and sha256(published) == sha256(path), "published APK differs"
     print(f"PASS: {version}/code{code}, signature, ZIP, 16 KB alignment, both libraries xz-packed and unpacked "
-          f"byte-exact, the unpacker's JNI, {checked} indexed assets, overrides, published SHA-256")
+          f"byte-exact, the unpacker's JNI, {checked} indexed assets, overrides, SHA-256")
 
 
 if __name__ == "__main__":

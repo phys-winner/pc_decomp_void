@@ -3,6 +3,7 @@
 !/.gitignore
 !/.gitattributes
 !/readme.md
+!/CHANGELOG.md
 !/LICENSE
 !/THIRD_PARTY_NOTICES.md
 !/dependencies.json
@@ -27,6 +28,7 @@
 /config/**
 !/config/**/
 !/config/**/*.json
+!/config/tutorial-shaders/*.hlsl
 
 !/tools/
 /tools/**

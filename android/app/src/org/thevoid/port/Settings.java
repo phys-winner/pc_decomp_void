@@ -47,7 +47,7 @@ final class Settings {
     float uiScale;         /* the game's interface, 0.7..1.5: the size it lays out in (gameSize) */
     float subtitleSize, textSize;
     boolean textContrast;
-    int hdr;               /* 0 off, 1 simplified, 2 full */
+    int hdr;               /* 0 off, 1 simplified, 2 full; all use SM3 strategies. */
     int anisotropy;        /* 0 (off), 2, 4, 8, 16 */
     int textureQuality;    /* 0 high, 1 low (the configurator's values) */
     int lightmapQuality;   /* 0 high, 1 medium, 2 low */
@@ -82,10 +82,10 @@ final class Settings {
         subtitleSize = bounded(prefs.getFloat("subtitleSize", 1f), 1f, 1f, 1.5f);
         textSize = bounded(prefs.getFloat("textSize", 1f), 1f, 1f, 1.5f);
         textContrast = prefs.getBoolean("textContrast", true);
-        hdr = prefs.getInt("hdr", 2);
+        hdr = Math.max(0, Math.min(2, prefs.getInt("hdr", 2)));
         anisotropy = prefs.getInt("anisotropy", 16);
         textureQuality = prefs.getInt("textureQuality", 0);
-        lightmapQuality = prefs.getInt("lightmapQuality", 0);
+        lightmapQuality = Math.max(0, Math.min(2, prefs.getInt("lightmapQuality", 0)));
         soundRate = prefs.getInt("soundRate", 44);
         sensitivityDefaulted = prefs.getBoolean("gameSensitivityDefaulted", false);
         touchHelpShown = prefs.getBoolean("touchHelpShown", false);
@@ -381,13 +381,13 @@ final class Settings {
          "Körper: Erinnerung rechts halten nimmt Farbe in die Palette. Am Herzen nach rechts wischen gibt Herzfarbe in die Erinnerung, nach links Kapillarlymphe in die Palette. Leere Stelle antippen gibt Farbe zurück; links unten berühren zeigt Fortschritt und Körperboni.",
          "Ciało: przytrzymaj Pamięć po prawej, aby pobrać kolor do Palety. Na sercu przesuń w prawo, aby przenieść jego kolor do Pamięci, lub w lewo, aby przenieść limfę z naczyń do Palety. Dotknij pustego miejsca, aby oddać kolor; lewy dół pokazuje postęp i premie."},
         {"The map: the hourglass slows time; the arrows accelerate time only while held. "
-             + "The navigator's arrow turns the map to the hero.",
+             + "The navigator's arrow or a three-finger tap centres the map on the hero.",
          "Карта: песочные часы — медленное время; стрелки ускоряют время только пока их держат. "
-             + "Стрелка навигатора — карта к герою.",
+             + "Стрелка навигатора или тап тремя пальцами — центрирование карты на герое.",
          "Karte: die Sanduhr verlangsamt die Zeit; die Pfeile beschleunigen sie nur beim Halten. "
-             + "Der Navigationspfeil dreht die Karte zum Helden.",
+             + "Der Navigationspfeil oder Tippen mit drei Fingern zentriert die Karte auf den Helden.",
          "Mapa: klepsydra zwalnia czas; strzałki przyspieszają go tylko podczas przytrzymania. "
-             + "Strzałka nawigacji przesuwa mapę do bohatera."},
+             + "Strzałka nawigacji lub dotknięcie trzema palcami centruje mapę na bohaterze."},
         {"The map: a finger held on a place shows it (its sister, its name) without going there; a tap goes there.",
          "Карта: палец, задержанный на месте, показывает его (сестру, название) без перехода; тап — идти туда.",
          "Karte: ein auf einem Ort gehaltener Finger zeigt ihn (seine Schwester, seinen Namen), ohne hinzugehen; "

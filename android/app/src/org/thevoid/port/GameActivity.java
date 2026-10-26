@@ -174,14 +174,14 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     void showDebugCommands() {
         if (!started || !settings.debugCommands) return;
-        DebugCommands.show(this, controls::runDebugCommand);
+        DebugCommands.show(this, controls::runDebugCommands);
     }
 
     /** The level/teleport list alone, reachable from the menu hold without the
      *  full debug console (the "/go" command works regardless of the toggle). */
     void showLevelSelection() {
         if (!started) return;
-        DebugCommands.showLevels(this, controls::runDebugCommand);
+        DebugCommands.showLevels(this, controls::runDebugCommands);
     }
 
     private void start(Release release) {
@@ -274,7 +274,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
          * pages of the port's settings, skipping the opening videos, the
          * head bobbing switch): with the menu, the game's Settings hold the
          * port's settings; the layer only makes sure they all exist. */
-        boolean nativeMenu = overrides.contains("Scripts\\ui\\main_menu.bin");
+        boolean nativeMenu = !release.library.equals("void_tension") && overrides.contains("Scripts\\ui\\main_menu.bin");
         File gameSettings = new File(data, "overrides/settings.xml");
         Profile.ensureSettings(new File(release.dir, "data/settings.xml"), gameSettings, settings.gameProps());
         if (nativeMenu) {
@@ -291,6 +291,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         } else {
             Profile.setProps(gameSettings, settings.gameProps());
         }
+        settings.save();
         /* Runtime input mode must never overwrite the player's touch preference. */
         Profile.setProps(gameSettings, java.util.Collections.singletonMap("PortTouchInput", settings.touchAdaptations ? "1" : "0"));
         if (!settings.sensitivityDefaulted) {

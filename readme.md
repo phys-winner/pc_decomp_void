@@ -16,7 +16,7 @@ rights holders. Game names and original content belong to their respective owner
 
 ## Status
 
-Current version: **0.1-dev** (`versionCode=2`). This is a development build for
+Current version: **0.2-dev** (`versionCode=3`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
 sideloading, signed with a local development key.
 
 - Original x86 game logic is translated ahead of time with
@@ -29,8 +29,8 @@ sideloading, signed with a local development key.
   and journal. Mouse, keyboard and gamepad handling are also included.
 - The Void 2009 and optional Tension 2008 use separate native libraries and
   release-specific script patches. The app identifies the supplied game data.
-- Native libraries are packed as independently checked XZ chunks and unpacked
-  on the first launch. The APK supports 16 KB native-library alignment.
+- Native libraries are packed as independently checked 128 MiB XZ chunks and
+  unpacked in parallel on the first launch. The APK supports 16 KB native-library alignment.
 - The 2009 library includes a lifted D3DX shader compiler; the build also
   generates a cache from the original game's static and procedural shaders.
 
@@ -152,6 +152,12 @@ Run these commands from the repository root.
    `d3dx_compiler` accordingly. The shader-cache helper loads this verified DLL
    from its own build directory and does not require a system-wide D3DX copy.
 
+Both APK builders require your protected signing key at `android/debug.keystore`
+(alias `androiddebugkey`, store/key password `android`). Supply your own development
+key before building and keep it for subsequent updates. Missing or unusable keys
+stop the build; the builders never generate or replace a key automatically.
+Keep all signing keys out of version control.
+
 3. Generate C and the original asset index, then compile, package, align and sign:
 
    ```powershell
@@ -176,7 +182,7 @@ Run these commands from the repository root.
    the game data you intend to run.
 
 The APK is written to **`build/android-game/the-void.apk`**. A complete build
-also writes **`pub/the-void-0.1-dev-<sha256-prefix>.apk`**. The eight-character
+also writes **`pub/the-void-0.2-dev-<sha256-prefix>.apk`**. The eight-character
 suffix is the first eight hexadecimal characters of the signed APK's SHA-256.
 
 To limit native compilation parallelism, build first and package those libraries:

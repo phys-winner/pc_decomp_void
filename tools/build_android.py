@@ -28,7 +28,10 @@ TARGET = f"aarch64-linux-android{API}"
 OUT = ROOT / "build/arm64"
 COMMON = ["--target=" + TARGET, "-fno-strict-aliasing", "-fwrapv", "-fvisibility=hidden", "-fPIC",
           "-ffp-contract=off", "-fno-math-errno", "-g0"]
-GENERATED_FLAGS = COMMON + ["-O2", "-w", "-DRECOMP_GENERATED_CODE", "-DRECOMP_TRACE", "-Iandroid/runtime"]
+# Fold repeated AArch64 instruction sequences without lowering hot-code optimisation.
+GENERATED_FLAGS = COMMON + ["-O2", "-mllvm", "-enable-machine-outliner=always",
+                            "-mllvm", "-machine-outliner-reruns=2",
+                            "-w", "-DRECOMP_GENERATED_CODE", "-DRECOMP_TRACE", "-Iandroid/runtime"]
 HOST_FLAGS = COMMON + ["-O2", "-std=gnu11", "-Wall", "-Wno-unused-function", "-Wno-unused-variable",
                        "-DRECOMP_TRACE", "-Iandroid/runtime", "-Iandroid/host"]
 # MojoShader (zlib), pinned in dependencies.json; only the profiles the host uses.
@@ -61,6 +64,11 @@ NATIVE_OVERRIDES = (
     "sub_15018800", "sub_15018ED0",
     "sub_16082260",   # RendererD3D: reserved 12-byte triangle append (renderer_native.c)
     "sub_16013760",   # RendererD3D: weighted region lighting (renderer_region_native.c)
+    "sub_16120040",   # RendererD3D: guarded Adler32 through system libz (renderer_adler_native.c)
+    # Main RendererD3D: persistent default-allocator inflate lifecycle (renderer_inflate_native.c).
+    "sub_1611E830", "sub_1611E7D0", "sub_1611E9F0", "sub_1611FFF0",
+    "sub_160D6ED0",   # RendererD3D: bounded SAT with native scratch (renderer_region_native.c)
+    "sub_1105E810",   # Engine: identical SAT, guarded by its own live epsilon
     "sub_181802C0",   # PhysX: reserved debug-line append (physics_native.c)
     "sub_110014F0",   # Engine: debug-vector append, preserving ECX (physics_native.c)
     # The CRT memcpy/memmove body of every module (android/host/crt_native.c).
@@ -78,6 +86,10 @@ NATIVE_OVERRIDES = (
 # the Android copy.
 FUNCTION_START = re.compile(rb"^void sub_\w+\(void\) \{\r?$", re.M)   # generated files use CRLF
 FUNCTION_END = re.compile(rb"\n\}\r?\n")
+# LLVM 18 excludes explicit sections from machine outlining; retain hot loops inline.
+HOT_FUNCTIONS = (b"sub_16014290", b"sub_160016C0", b"sub_160902D0", b"sub_1608F790",
+                 b"sub_11034940", b"sub_1105E810")
+HOT_FUNCTION_START = re.compile(rb"^void (?:" + b"|".join(HOT_FUNCTIONS) + rb")\(void\) \{", re.M)
 XMM_LOCAL = (b"#undef _xmm\n#undef RECOMP_XMM_OUT\n#undef RECOMP_XMM_IN\n#define _xmm l_xmm\n"
              b"#define RECOMP_XMM_OUT() memcpy(g_xmm, l_xmm, sizeof l_xmm)\n"
              b"#define RECOMP_XMM_IN() memcpy(l_xmm, g_xmm, sizeof l_xmm)\n")
@@ -101,7 +113,7 @@ def localize_sse(text):
 
 # Measured SAT and PhysX leaves: keep the exact operations while clang removes
 # the eight-slot global shifts at every x87 push/pop.
-LOCAL_FPU_FUNCTIONS = (b"sub_160D6ED0", b"sub_1105E810", b"sub_18064830")
+LOCAL_FPU_FUNCTIONS = (b"sub_160D6ED0", b"sub_1105E810", b"sub_18064830", b"sub_160902D0")
 FPU_LOCAL = (b"#undef _st\n#undef _fp_top\n#define _st l_st\n#define _fp_top l_fp_top\n"
              b"#undef fp_push\n#undef fp_pop\n#undef fp_xch\n"
              b"#define fp_push(v) fp_push_local_impl(l_st, l_st_i64, &l_fp_top, (v))\n"
@@ -126,7 +138,7 @@ def localize_fpu(text):
     parts, pos = [], 0
     for match in FUNCTION_START.finditer(text):
         name = match.group(0).split(b"(", 1)[0].split()[-1]
-        if name not in LOCAL_FPU_FUNCTIONS:
+        if name.removesuffix(b"_lifted") not in LOCAL_FPU_FUNCTIONS:
             continue
         end = FUNCTION_END.search(text, match.end())
         assert end and match.start() >= pos
@@ -135,8 +147,11 @@ def localize_fpu(text):
         assert b"fp_push(" in body and b"fp_pop()" in body
         baseline = b"static __attribute__((noinline)) " + match.group(0).replace(name, name + b"_fp_global") + body
         localized = body.replace(b"g_st_i64", b"l_st_i64")
+        epsilon = b"0x11122CE0" if name.removesuffix(b"_lifted") == b"sub_1105E810" else b"0x162D2A64"
         guard = (b"!void_physics_sweep_finite()" if name == b"sub_18064830" else
-                 b"!void_renderer_native_enabled() || !recomp_sat_finite(g_edx, MEM32(g_esp + 4))")
+                 b"!void_renderer_particle_finite()" if name == b"sub_160902D0" else
+                 b"!void_renderer_native_enabled() || MEM32(" + epsilon + b") != 0x3f7fffefu || "
+                 b"!recomp_sat_finite(g_edx, MEM32(g_esp + 4))")
         start = (b"\n    if (" + guard + b") { " + name + b"_fp_global(); return; }\n"
                  b"    double l_st[8]; int64_t l_st_i64[8]; int l_fp_top = g_fp_top;\n"
                  b"    memcpy(l_st, g_st, sizeof l_st); memcpy(l_st_i64, g_st_i64, sizeof l_st_i64);")
@@ -144,7 +159,8 @@ def localize_fpu(text):
         pos = end.end()
     if not parts:
         return text
-    return b"int void_renderer_native_enabled(void);\nint void_physics_sweep_finite(void);\n" + b"".join(parts + [text[pos:]])
+    return (b"int void_renderer_native_enabled(void);\nint void_physics_sweep_finite(void);\n"
+            b"int void_renderer_particle_finite(void);\n" + b"".join(parts + [text[pos:]]))
 
 
 def localize_physics_tree(text):
@@ -321,6 +337,7 @@ def override_source(source, local_xmm):
             text = localize_fpu(text)
             text = localize_physics_tree(text)
             text = localize_physics_worker(text)
+            text = HOT_FUNCTION_START.sub(rb'__attribute__((section(".text.hot"))) \g<0>', text)
     if text == original:
         return source, []
     patched = OUT / "patched" / source.parent.name / source.name
@@ -328,6 +345,60 @@ def override_source(source, local_xmm):
     if not patched.is_file() or patched.read_bytes() != text:
         patched.write_bytes(text)
     return patched, ["-I" + source.parent.relative_to(ROOT).as_posix()]
+
+
+def private_renderer_sat(text):
+    """The pinned boolean SAT leaf with native scratch, preserving emitted math."""
+    found = re.search(rb"^void sub_160D6ED0\(void\) \{.*?^\}", text, re.M | re.S)
+    assert found, "renderer SAT body missing"
+    body = found[0].replace(b"\r\n", b"\n")
+    assert hashlib.sha256(body).hexdigest() == "17a80228f6cf7d34f08c44fd8b31dc9dcf2a9b21d371f240a645f5bafe943b4a"
+    body = body.decode().replace("void sub_160D6ED0(void)",
+        "static unsigned region_sat_overlap(const float *a, const float *b, uint32_t *backedges)")
+    body = body.replace("    RECOMP_REGS_LOCALS", """    uint32_t frame[40];
+    uintptr_t n_eax=0, n_ecx=0, n_edx=(uintptr_t)a, n_ebx=0;
+    uintptr_t n_esp=(uintptr_t)(frame+40), n_ebp=0, n_esi=0, n_edi=0;
+    double n_st[8]={0}; int64_t n_shadow[8]={0}; int n_top=0;
+    xmm_t n_xmm[8];""")
+    body = body.replace("    RECOMP_ENTER(0x160D6ED0u);", "")
+    body = body.replace("ebp = MEM32(esp + 0x84);", "ebp = (uintptr_t)b;")
+    body = body.replace("*(float*)&MEM32(0x162D2A64)", "sse_f32(0x3f7fffefu)")
+    body = re.sub(r"PUSH32\(esp, (ebx|ebp|esi|edi)\);", "esp -= 4;", body)
+    body = re.sub(r"(edi|esi|ebp|ebx) = POP32_VAL\(esp\);", "esp += 4;", body)
+    body = body.replace("RECOMP_FLAGS_OUT();", "").replace("RECOMP_REGS_OUT();", "")
+    body = body.replace("return;", "return (unsigned)(n_eax & 255u);")
+    body = body.replace("RECOMP_BACKEDGE();", "++*backedges;")
+    body = re.sub(r"\b(eax|ecx|edx|ebx|esp|ebp|esi|edi)\b", lambda m: "n_" + m[0], body)
+    body = re.sub(r"\b_st\b", "n_st", body).replace("g_st_i64", "n_shadow")
+    body = re.sub(r"\b_xmm\b", "n_xmm", body)
+    body = body.replace("fp_push(", "fp_push_local_impl(n_st, n_shadow, &n_top, ")
+    body = body.replace("fp_pop()", "fp_pop_local_impl(n_st, n_shadow, &n_top)")
+    body = body.replace("fp_xch(", "fp_xch_local_impl(n_st, n_shadow, ")
+    body = body.replace("MEM32(", "REGION_SAT_MEM32(").replace("ADDR(", "REGION_SAT_ADDR(")
+    body = re.sub(r"/\*.*?\*/", "", body)
+    assert not any(x in body for x in ("RECOMP_", "POP32", "PUSH32")) and not re.search(r"\bg_", body)
+    return ("#define REGION_SAT_ADDR(a) ((uintptr_t)(a))\n"
+            "#define REGION_SAT_MEM32(a) (*(uint32_t *)REGION_SAT_ADDR(a))\n" + body +
+            "\n#undef REGION_SAT_ADDR\n#undef REGION_SAT_MEM32\n")
+
+
+def host_source(source):
+    if RELEASE is not None or source.name != "renderer_region_native.c":
+        return source
+    assert module_image("renderer").u32(0x162D2A64) == 0x3f7fffef
+    assert module_image("engine").u32(0x11122CE0) == 0x3f7fffef
+    engine = re.search(rb"^void sub_1105E810\(void\) \{.*?^\}",
+        (GENERATED / "engine-x86/engine_0023.c").read_bytes(), re.M | re.S)
+    assert engine and hashlib.sha256(engine[0].replace(b"\r\n", b"\n")).hexdigest() == "d41140ee11f33afc37f24da52a3f33bde6b4327b036642124a0aa1a00a373a2d"
+    helper = private_renderer_sat((GENERATED / "renderer-x86/renderer_0074.c").read_bytes()).encode()
+    content = source.read_bytes()
+    assert content.count(b"/* GENERATED_REGION_SAT */") == 1
+    content = content.replace(b"/* GENERATED_REGION_SAT */", helper)
+    patched = OUT / "patched/host" / source.name
+    patched.parent.mkdir(parents=True, exist_ok=True)
+    if not patched.is_file() or patched.read_bytes() != content:
+        patched.write_bytes(content)
+    return patched
 
 
 def sha_file(path):
@@ -509,9 +580,10 @@ def main():
     host_dir = "obj/host-app" if args.shared else "obj/host"
     for source in [] if args.compile_only else host_sources():
         obj = OUT / host_dir / (source.stem + ".o")
+        source = host_source(source)
         # These computations run inside the guest lock, like generated code.
         flags = host_flags + (["-DRECOMP_PLAIN_MEMORY"] if not args.volatile_memory and
-                              source.name in ("navmesh_native.c", "renderer_region_native.c") else [])
+                              source.name in ("navmesh_native.c", "renderer_region_native.c", "renderer_particle_native.c") else [])
         fp = hashlib.sha256(json.dumps([sha_file(source), host_digest, compiler_sha, flags]).encode()).hexdigest()
         jobs.append((source, obj, flags, fp))
     # Largest first keeps the pool busy at the end.
@@ -556,7 +628,7 @@ def main():
     # LOAD segments on 16 KB boundaries: devices with 16 KB pages (and Android 16+'s
     # compatibility check) require it; 4 KB devices load such images unchanged.
     link = [str(CLANG), "--target=" + TARGET, "-fuse-ld=lld", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc", "-Wl,-z,max-page-size=16384",
-            "-Wl,--build-id=sha1", "-Wl,--pack-dyn-relocs=android", "@" + str(response), "-o", str(output), "-lm", "-llog", "-ldl", "-lEGL", "-lGLESv3"]
+            "-Wl,--build-id=sha1", "-Wl,--pack-dyn-relocs=android", "@" + str(response), "-o", str(output), "-lm", "-lz", "-llog", "-ldl", "-lEGL", "-lGLESv3"]
     link += ["-shared", "-landroid", "-lOpenSLES", "-laaudio"] if args.shared else ["-pie"]
     if args.pgo_generate:
         link.append("-fprofile-instr-generate")

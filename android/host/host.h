@@ -106,6 +106,7 @@ void void_eh_reset_thread(void);
 
 /* threads.c */
 void void_threads_init(void);
+void void_host_thread_init(void);
 void void_wait_broadcast(void);
 uint32_t void_wait_extra_cond(int count, const uint32_t *handles, uint32_t timeout,
     int (*extra)(void *), void *arg);

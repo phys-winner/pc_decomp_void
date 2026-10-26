@@ -11,7 +11,11 @@
 #endif
 
 #ifndef VOID_RELEASE
+/* GENERATED_REGION_SAT */
 void sub_160D6ED0(void);
+void sub_160D6ED0_lifted(void);
+void sub_1105E810_lifted(void);
+int void_renderer_native_enabled(void);
 int void_renderer_region_enabled(void);
 void sub_16013760_lifted(void);
 static uint32_t region_native_calls, region_fallback_calls;
@@ -29,6 +33,31 @@ static int region_overlap(uint32_t a, uint32_t an, uint32_t b, uint32_t bn)
 {
     return (uint64_t)a < (uint64_t)b + bn && (uint64_t)b < (uint64_t)a + an;
 }
+
+/* All direct callers consume AL; callee-saved GPR, ESP and final flags remain
+ * exact. Caller-clobbered GPR/XMM, empty x87 slots and scratch are discarded. */
+static void region_sat_call(uint32_t epsilon, void (*lifted)(void))
+{
+    uint32_t stack = g_esp, box = g_edx;
+    if (!void_renderer_native_enabled() || g_fp_top || MEM32(epsilon) != 0x3f7fffefu ||
+        !region_range(stack - 136u, 144u) ||
+        (recomp_yield_hook && g_backedges >= RECOMP_YIELD_EVERY - 32u)) {
+        lifted(); return;
+    }
+    uint32_t obb = MEM32(stack + 4);
+    if (!region_range(box, 24) || !region_range(obb, 60) ||
+        region_overlap(box, 24, stack - 136u, 144u) || region_overlap(obb, 60, stack - 136u, 144u) ||
+        !recomp_sat_finite(box, obb)) { lifted(); return; }
+    uint32_t edges = 0;
+    unsigned result = region_sat_overlap((const float *)GPTR(box), (const float *)GPTR(obb), &edges);
+    g_backedges += edges;
+    g_eax = (g_eax & ~255u) | result;
+    g_esp = stack + 8u;
+    g_flag_k = FK_ADD; g_flag_a = stack - 120u; g_flag_b = 120u; g_flag_cf = 0;
+}
+
+void sub_160D6ED0(void) { region_sat_call(0x162D2A64u, sub_160D6ED0_lifted); }
+void sub_1105E810(void) { region_sat_call(0x11122CE0u, sub_1105E810_lifted); }
 
 static float region_float(uint32_t at) { return sse_f32(MEM32(at)); }
 static void region_store(uint32_t at, float value) { memcpy(GPTR(at), &value, 4); }
@@ -53,7 +82,8 @@ static float region_volume(uint32_t query, const float lo[3], const float hi[3])
 int void_renderer_region_calculate(void)
 {
     uint32_t stack = g_esp;
-    if (!void_renderer_region_enabled() || g_fp_top != 0 || !region_range(stack - 512u, 528u)) return 0;
+    if (!void_renderer_region_enabled() || g_fp_top != 0 || MEM32(0x162D2A64u) != 0x3f7fffefu ||
+        !region_range(stack - 512u, 528u)) return 0;
     uint32_t context = MEM32(stack + 4), box = MEM32(stack + 8), index = MEM32(stack + 12);
     if (!region_range(context, 32) || !region_range(box, 24)) return 0;
     uint32_t tree = MEM32(context), obb = MEM32(context + 4), query = MEM32(context + 8);
@@ -150,8 +180,17 @@ int void_renderer_region_calculate(void)
                         }
                         g_edx = cell; g_esp = stack - 192u;
                         MEM32(g_esp) = RECOMP_RETADDR; MEM32(g_esp + 4) = obb;
-                        sub_160D6ED0();
-                        if (!(g_eax & 255u)) { cell_weights[k] = 0.f; position[0] = delta[0] + position[0]; continue; }
+                        /* At most 17 bounded backedges; retain the original scheduler handover. */
+                        if (recomp_yield_hook && g_backedges >= RECOMP_YIELD_EVERY - 32u) sub_160D6ED0();
+                        else {
+                            uint32_t edges = 0;
+                            g_eax = region_sat_overlap((const float *)GPTR(cell), (const float *)GPTR(obb), &edges);
+                            g_backedges += edges;
+                        }
+                        if (!(g_eax & 255u)) {
+                            cell_weights[k] = 0.f;
+                            position[0] = delta[0] + position[0]; continue;
+                        }
                         float cell_lo[3], cell_hi[3];
                         for (unsigned axis = 0; axis < 3; ++axis) {
                             cell_hi[axis] = position[axis] + extent[axis];

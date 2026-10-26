@@ -762,6 +762,8 @@ static void thread_object_destroy(void_object *o) { (void)o; }
  * threads such as the mixer and the GL driver's keep the default mask.
  * VOID_BIG_CORES=0 turns this off. */
 static cpu_set_t big_cores;
+static cpu_set_t host_cores;
+static int host_cores_valid;
 static int big_cores_count;
 static pthread_once_t big_cores_once = PTHREAD_ONCE_INIT;
 
@@ -779,6 +781,7 @@ static long cpu_value(int cpu, const char *name)
 
 static void big_cores_init(void)
 {
+    host_cores_valid = sched_getaffinity(0, sizeof host_cores, &host_cores) == 0;
     const char *env = getenv("VOID_BIG_CORES");
     if (env && *env == '0') return;
     long value[CPU_SETSIZE];
@@ -806,6 +809,13 @@ static void pin_guest_thread(void)
 {
     pthread_once(&big_cores_once, big_cores_init);
     if (big_cores_count) sched_setaffinity(0, sizeof big_cores, &big_cores);
+}
+
+void void_host_thread_init(void)
+{
+    pthread_once(&big_cores_once, big_cores_init);
+    /* pthread_create inherits the guest's narrowed mask, including on a single prime core. */
+    if (host_cores_valid) sched_setaffinity(0, sizeof host_cores, &host_cores);
 }
 
 static void *thread_main(void *arg)

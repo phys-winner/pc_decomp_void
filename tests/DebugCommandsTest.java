@@ -20,8 +20,38 @@ public final class DebugCommandsTest {
         assert !DebugCommands.validCommand("/god\n/go 1");
         assert !DebugCommands.validCommand("/god\r/go 1");
         assert !DebugCommands.validCommand("/god\0");
-        assert DebugCommands.LEVEL_IDS.length == 35;
-        assert DebugLevels.RU.length == 35 && DebugLevels.DE.length == 35;
+        assert DebugCommands.LEVEL_IDS.length == 26;
+        assert DebugLevels.RU.length == 26 && DebugLevels.DE.length == 26;
+        for (boolean legacy : new boolean[] {false, true}) {
+            Settings.legacyGame = legacy;
+            int normal = DebugCommands.levelIds().length;
+            String[] extra = DebugCommands.extraLabels();
+            assert extra.length == (legacy ? 50 : 43);
+            if (!legacy) {
+                for (int id : DebugCommands.levelIds()) assert id != 26;
+                for (String label : extra) {
+                    assert !label.equals("[*] Twin's appearance");
+                    for (String hunter : new String[] {"ironclad", "driller", "caterpillar", "dudochnik", "lattice"}) {
+                        assert !label.equals("[*] Brother: " + hunter) && !label.equals("[*] Battle: " + hunter);
+                    }
+                }
+            }
+            assert extra[extra.length - 1].equals("[?] Backyard");
+            for (int i = 0; i < normal + extra.length; ++i) {
+                if (i >= normal && i < normal + extra.length - 1) assert extra[i - normal].startsWith("[*] ");
+                String[] expected = DebugCommands.levelCommands(i);
+                java.util.ArrayList<String[]> selected = new java.util.ArrayList<>();
+                DebugCommands.selectLevel(i, selected::add);
+                assert selected.size() == 1 : "a complete route must unpause once";
+                assert java.util.Arrays.equals(selected.get(0), expected);
+                for (String command : expected) assert DebugCommands.validCommand(command);
+                if (i < normal) assert expected[0].equals("/go " + DebugCommands.levelIds()[i]);
+                String first = expected[0];
+                expected[0] = "changed";
+                assert DebugCommands.levelCommands(i)[0].equals(first) : "must not mutate generated route";
+            }
+        }
+        Settings.legacyGame = false;
         for (String usage : DebugCommands.COMMANDS) {
             String[] parts = usage.split(" +");
             StringBuilder selected = new StringBuilder(parts[0]);
@@ -50,6 +80,6 @@ public final class DebugCommandsTest {
         assert DebugCommands.argumentValues("chapter_num").length == 7;
         assert DebugCommands.argumentValues("zone").length == 21;
         assert DebugCommands.argumentValues("[zone]")[0].isEmpty();
-        System.out.println("debug commands: JNI byte limit, Unicode, control rejection, 35 levels, selectors for every argument PASS");
+        System.out.println("debug commands: JNI byte limit, Unicode, control rejection, 26 levels, selectors for every argument PASS");
     }
 }

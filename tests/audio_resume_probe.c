@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdlib.h>
+#include <io.h>
+#define access _access
+#define F_OK 0
+static const char *test_profile;
+static const char *void_data_dir(void) { return test_profile; }
 
 typedef struct { int alive, started, disconnected; } AAudioStream;
 typedef int AAudioStreamBuilder;
@@ -70,16 +76,33 @@ typedef struct { int unused; } facet_t;
 typedef struct dsbuf dsbuf_t;
 #define MIX_RATE 48000
 #define DSBCAPS_CTRL3D 0x10
+#define DS_OK 0
+#define DSERR_INVALIDPARAM 0x80070057u
+#define COM_METHOD(kind, name, count) static uint32_t kind##_##name(void)
+static uint32_t arguments[3];
+#define ARG(n) arguments[n]
 #define DSTRACE(...) ((void)0)
 static uint8_t guest_pcm[4096];
+#define GPTR(addr) (guest_pcm + (addr))
 #define MEM8(addr) guest_pcm[addr]
 #define MEM16(addr) (*(uint16_t *)(guest_pcm + (addr)))
+#define MEM32(addr) (*(uint32_t *)(guest_pcm + (addr)))
 static int notifications;
 static void signal_event(uint32_t event) { assert(event == 1); ++notifications; }
 
 /* PRODUCTION */
 
-int main(void) {
+int main(int argc, char **argv) {
+    assert(argc == 2);
+    test_profile = argv[1];
+    assert(_putenv_s("VOID_DSOUND_TRACE", "") == 0 && !trace_enabled());
+    char marker[1024];
+    snprintf(marker, sizeof marker, "%s/dsound-trace", test_profile);
+    FILE *file = fopen(marker, "wb"); assert(file && fclose(file) == 0);
+    assert(trace_enabled());
+    assert(remove(marker) == 0 && !trace_enabled());
+    assert(_putenv_s("VOID_DSOUND_TRACE", "1") == 0 && trace_enabled());
+    assert(_putenv_s("VOID_DSOUND_TRACE", "0") == 0 && !trace_enabled());
     int16_t pcm[960];
     for (unsigned i = 0; i < 960; ++i) pcm[i] = 123;
     audio_paused = 1;
@@ -149,6 +172,38 @@ int main(void) {
     audio_paused = 0;
     mix_chunk(mixed, 240);
     assert(!one_shot.playing && notifications == 1);
-    puts("PASS: 30 pause/resume cycles, paused startup, disconnect/write/start/open failures, paced retry, partial-write levels; paused one-shot cursor/notifications");
+    arguments[1] = 2048;
+    memset(GPTR(2048), 0xAA, 64);
+    MEM32(2048) = 64;
+    assert(lst_GetAllParameters() == DS_OK);
+    float *listener = (float *)GPTR(2048);
+    assert(listener[9] == 1.0f && listener[11] == 1.0f);
+    assert(listener[13] == 1.0f && listener[14] == 1.0f && listener[15] == 1.0f);
+    assert(listener[1] == 0 && listener[4] == 0 && listener[7] == 0);
+    assert(lst_SetAllParameters() == DS_OK);
+    assert(listener_front[2] == 1 && listener_top[1] == 1 && distance_factor == 1 && rolloff == 1);
+    dsbuf_t distant = {0};
+    distant.playing = distant.looping = 1; distant.size = 4; distant.block = 4;
+    distant.bits = 16; distant.channels = 2; distant.frequency = MIX_RATE;
+    distant.flags = DSBCAPS_CTRL3D; distant.pos[2] = 10;
+    distant.min_distance = 1; distant.max_distance = 100;
+    MEM16(0) = MEM16(2) = 16384;
+    buffers = &distant;
+    mix_chunk(mixed, 1);
+    assert(fabsf(mixed[0] - 0.05f) < 1e-6f && mixed[0] == mixed[1]);
+    listener[1] = 0; listener[2] = 0; listener[3] = 9;
+    assert(lst_SetAllParameters() == DS_OK);
+    mix_chunk(mixed, 1);
+    assert(mixed[0] == 0.5f && mixed[1] == 0.5f);
+    listener[7] = 1; listener[9] = 0; listener[13] = 0.5f; listener[14] = 0.75f;
+    assert(lst_SetAllParameters() == DS_OK);
+    memset(GPTR(2304), 0xAA, 64); MEM32(2304) = 64; arguments[1] = 2304;
+    assert(lst_GetAllParameters() == DS_OK);
+    assert(!memcmp(GPTR(2048), GPTR(2304), 64));
+    MEM32(2304) = 60;
+    assert(lst_GetAllParameters() == DSERR_INVALIDPARAM && lst_SetAllParameters() == DSERR_INVALIDPARAM);
+    arguments[1] = 0;
+    assert(lst_GetAllParameters() == DSERR_INVALIDPARAM && lst_SetAllParameters() == DSERR_INVALIDPARAM);
+    puts("PASS: 30 pause/resume cycles, paused startup, disconnect/write/start/open failures, paced retry, partial-write levels; paused one-shot cursor/notifications; DS3DLISTENER layout, defaults, roundtrip, near/far PCM; profile-only trace marker and environment switch");
     return 0;
 }

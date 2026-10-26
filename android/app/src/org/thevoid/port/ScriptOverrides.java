@@ -18,7 +18,7 @@ import org.json.JSONObject;
 
 /** The port's patched game files (tools/patch_scripts.py, carried in the
  *  APK's assets/overrides): scripts from Scripts.vfs, string tables from
- *  Properties.vfs, loose files of the data folder (actions.xml). Each patch is made from one release's original, so a
+ *  Properties.vfs, repaired scene/audio assets, and loose data files (actions.xml). Each patch is made from one release's original, so a
  *  file goes into <data>/overrides (android/host/files.c serves it to the
  *  game as a loose file) only when the running release's original has the
  *  same SHA-256; overrides of other releases are removed. */
@@ -62,7 +62,7 @@ final class ScriptOverrides {
                     dir = vfs.isFile() ? directory(vfs, top) : new HashMap<>();
                     archives.put(top, dir);
                 }
-                long[] at = dir.get(path.toLowerCase(Locale.ROOT));
+                long[] at = entry(dir, top + path.substring(slash));
                 if (at != null) originals.put(path, sha256(read(vfs, at[0], (int) at[1])));
             }
             for (int i = 0; i < index.length(); ++i) {
@@ -99,7 +99,16 @@ final class ScriptOverrides {
         return dir;
     }
 
-    /** An LP2C container's directory: lowercase "<root>\dir\file" -> {offset, size}. */
+    /** Exact archive spelling wins; legacy paths still fall back without case. */
+    static long[] entry(Map<String, long[]> directory, String path) {
+        long[] exact = directory.get(path);
+        if (exact != null) return exact;
+        for (Map.Entry<String, long[]> item : directory.entrySet())
+            if (item.getKey().equalsIgnoreCase(path)) return item.getValue();
+        return null;
+    }
+
+    /** An LP2C container's directory: "<root>\dir\file" -> {offset, size}. */
     static Map<String, long[]> directory(File vfs, String root) throws IOException {
         Map<String, long[]> map = new HashMap<>();
         try (RandomAccessFile f = new RandomAccessFile(vfs, "r")) {
@@ -119,7 +128,7 @@ final class ScriptOverrides {
             String name = name(f);
             int[] meta = new int[6];
             for (int k = 0; k < 6; ++k) meta[k] = le(f);
-            map.put((path + "\\" + name).toLowerCase(Locale.ROOT), new long[] {meta[2] & 0xFFFFFFFFL, meta[0] & 0xFFFFFFFFL});
+            map.put(path + "\\" + name, new long[] {meta[2] & 0xFFFFFFFFL, meta[0] & 0xFFFFFFFFL});
         }
         for (int i = 0; i < dirs; ++i) {
             String name = name(f);

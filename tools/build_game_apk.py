@@ -3,7 +3,7 @@
     python tools/build_game_apk.py [--install] [--serial SERIAL]
                                    [--release-only NAME] [--java-only] [--push-lib]
 The library comes from tools/build_android.py --shared, packed as an xz
-stream per 32 MiB chunk in assets/native (unpacked on the first start by
+stream per 128 MiB chunk in assets/native (unpacked on the first start by
 lib/libvoidxz.so, NativeLibrary.java), with the PE images it was lifted from (assets/lifted, assets/lifted-<release>: Images.java
 copies them into the app's files unless /sdcard/TheVoid holds them, as
 tools/push_game_data.py puts them); the game's own files are where the
@@ -25,7 +25,7 @@ from xml.etree import ElementTree as ET
 
 from build_android import TOOLCHAIN
 from push_game_data import GAMEMODULE_SHA256, LIFTED, sha256
-
+from debug_signer import resolve_debug_signer
 from toolchain import SDK, JAVA_HOME, ADB
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,18 +58,17 @@ def xz_tool():
     raise SystemExit("xz 5.4 or newer is needed (XZ Utils; Git for Windows has one in mingw64/bin)")
 
 
-CHUNK = 32 << 20   # NativeLibrary.java / android/unpack/unpack.c take it from assets/native/index.txt
+CHUNK = 128 << 20   # NativeLibrary.java / android/unpack/unpack.c take it from assets/native/index.txt
 
 
 def compress_library(stripped):
-    """The stripped library as xz: LZMA2 at preset 9e behind the ARM64 branch
-    filter, CRC32 checked. Deflate's 32 KiB window misses the lifted code's
-    long repeats (libvoid.so: 126 MB deflated, 60 MB this way). It is cut in
-    CHUNK pieces packed as streams of their own, one after another: the
-    phone unpacks them on all cores at once (about 7 % larger than one
-    stream). Made once per library content. Returns (path, sha256, sizes)."""
+    """XZ with ARM64 BCJ and word-aligned LZMA literals (lc=0, lp=2).
+    A CHUNK-sized dictionary retains distant repeats; independent streams
+    still unpack in parallel, straight into the mapped output dictionary.
+    The cache names both the library content and compression profile.
+    Returns (path, sha256, sizes)."""
     digest = sha256(stripped)
-    out = NATIVE_XZ / f"{stripped.name}.{digest[:16]}.{CHUNK >> 20}m.xz"
+    out = NATIVE_XZ / f"{stripped.name}.{digest[:16]}.{CHUNK >> 20}m-lp2.xz"
     table = out.with_suffix(".sizes")
     if not (out.is_file() and table.is_file()):
         NATIVE_XZ.mkdir(parents=True, exist_ok=True)
@@ -79,7 +78,7 @@ def compress_library(stripped):
         tool = xz_tool()
 
         def pack(at):
-            return subprocess.run([tool, "--stdout", "--arm64", "--lzma2=preset=9e", "--check=crc32", "--threads=1"],
+            return subprocess.run([tool, "--stdout", "--arm64", f"--lzma2=preset=9e,dict={CHUNK},lc=0,lp=2,pb=2", "--check=crc32", "--threads=1"],
                                   input=data[at:at + CHUNK], capture_output=True, check=True).stdout
 
         with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 4) - 2)) as pool:
@@ -124,6 +123,7 @@ def main():
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL") or os.environ.get("VOID_SERIAL"))
     parser.add_argument("--skip-native", action="store_true")
+    parser.add_argument("--no-publish", action="store_true", help="keep the test APK in build; do not copy it to pub")
     parser.add_argument("--global-regs", action="store_true", help="build_android.py upstream mode (see there)")
     parser.add_argument("--volatile-memory", action="store_true", help="build_android.py upstream mode (see there)")
     parser.add_argument("--release-only", help="pack only this library: void (2009 build) or a release name")
@@ -132,7 +132,7 @@ def main():
                         help="copy the built libraries into the installed app's files (development)")
     args = parser.parse_args()
     if (args.install or args.push_lib) and not args.serial:
-        parser.error("deployment requires --serial SERIAL or ANDROID_SERIAL")
+        parser.error("--serial or VOID_SERIAL is required for --install/--push-lib")
     if not os.environ.get("JAVA_HOME"):
         parser.error("set JAVA_HOME to a JDK installation")
     for tool in (TOOLS / "aapt2.exe", TOOLS / "d8.bat", TOOLS / "zipalign.exe",
@@ -144,6 +144,9 @@ def main():
         parser.error("requested release is not prepared; run tools/prepare_android.py --tension first")
     if args.java_only:
         args.skip_native = True
+    signer = resolve_debug_signer(JAVA_HOME / "bin/keytool.exe", ROOT)
+    keystore = Path(signer["keystore"])
+    print("Debug signer certificate SHA-256: " + signer["certificate_sha256"])
     modes = [(flag, name) for flag, name, on in (("--global-regs", "globalregs", args.global_regs),
                                                  ("--volatile-memory", "volatilemem", args.volatile_memory)) if on]
     want_2009 = args.release_only in (None, "void")
@@ -248,19 +251,13 @@ def main():
                 apk.writestr(f"assets/{folder}/index.txt", "".join(index))
     aligned = OUT / "aligned.apk"
     run(TOOLS / "zipalign.exe", "-f", "-P", "16", "4", unsigned, aligned)   # stored .so entries on 16 KB pages
-    keystore = ROOT / "build/android/debug.keystore"
-    if not keystore.exists():
-        keystore.parent.mkdir(parents=True, exist_ok=True)
-        run(JAVA_HOME / "bin/keytool.exe", "-genkeypair", "-keystore", keystore, "-storepass", "android",
-            "-keypass", "android", "-alias", "androiddebugkey", "-keyalg", "RSA", "-keysize", "2048",
-            "-validity", "10000", "-dname", "CN=The Void Port")
     apk = OUT / "the-void.apk"
     run(TOOLS / "apksigner.bat", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--key-pass", "pass:android",
         "--out", apk, aligned)
     run(TOOLS / "apksigner.bat", "verify", "--verbose", apk)
     run(TOOLS / "zipalign.exe", "-c", "-P", "16", "4", apk)
     print(f"APK: {apk} ({apk.stat().st_size / 1e6:.1f} MB)")
-    if not args.java_only and args.release_only is None and not modes:
+    if not args.no_publish and not args.java_only and args.release_only is None and not modes:
         version = ET.parse(ROOT / "android/app/AndroidManifest.xml").getroot().get(
             "{http://schemas.android.com/apk/res/android}versionName")
         published = ROOT / "pub" / f"the-void-{version}-{sha256(apk)[:8]}.apk"

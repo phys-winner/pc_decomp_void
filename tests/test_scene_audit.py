@@ -516,4 +516,7 @@ for index in ("research/vfs-index.json", "research/vfs-index.german.json"):
         pc, result = vm.run(method(patched, 'onConsoleCommand'), {-5: command, -4: args}, stops=(entry + 8,))
         assert pc == entry + 8 and result[0] == command and result[-5] == command and result[-4] == args
 
-print("22 RU/DE Sister queries, 88 typed native UI gifts, reproduced cross-context Neq defect, 20 original hunter damage/getter paths, all HP phases, key latches, load race and preserved metadata PASS")
+serial_required = subprocess.run([sys.executable, "-B", str(ROOT / "tools/scene_audit.py")], capture_output=True, text=True)
+assert serial_required.returncode == 2 and "--serial is required for device checks" in serial_required.stderr
+
+print("22 RU/DE Sister queries, 88 typed native UI gifts, reproduced cross-context Neq defect, 20 original hunter damage/getter paths, all HP phases, key latches, load race, explicit device selection and preserved metadata PASS")

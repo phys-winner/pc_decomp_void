@@ -1,0 +1,37 @@
+{
+  "profile": "ps_3_0",
+  "flags": 17426,
+  "macros": "hdr_enabled=1\nprofile_ps_3_0=1\nprofile_ps=1\n",
+  "shaders": [
+    {
+      "source": "38ae2c180627a3d9.hlsl",
+      "key": "38ae2c180627a3d9",
+      "bytecode_sha256": "efc54bfc6c3f681f37f0f8e2832200ba5164d71003ff1bf69786820fc85db830"
+    },
+    {
+      "source": "64c6a95141481acc.hlsl",
+      "key": "64c6a95141481acc",
+      "bytecode_sha256": "464dd944ba7aeff1c1cd61701f74b791f751d28efd570edfc9071c2a27e59623"
+    },
+    {
+      "source": "6b1e07f37cd4631b.hlsl",
+      "key": "6b1e07f37cd4631b",
+      "bytecode_sha256": "1be73e777627aaf5184ee5eb66d14e602e122e4a335e8278911f304043f6f00e"
+    },
+    {
+      "source": "6baec45b2c72e1fd.hlsl",
+      "key": "6baec45b2c72e1fd",
+      "bytecode_sha256": "5de53a6431ce4b19fd2c9068685c068e265c10b01bd5aaffc228ae938964a1a8"
+    },
+    {
+      "source": "e3ae3775dc9cedad.hlsl",
+      "key": "e3ae3775dc9cedad",
+      "bytecode_sha256": "ba860c6c352356390e9ce2fb91121b5e2350012073fd1b0946c08096833900b2"
+    },
+    {
+      "source": "eead7e2b4ae85eeb.hlsl",
+      "key": "eead7e2b4ae85eeb",
+      "bytecode_sha256": "9a675e6768a68d7e92fb00659755741df1ad8624db35f27c35b7abe13f736429"
+    }
+  ]
+}

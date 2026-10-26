@@ -96,13 +96,18 @@ public class FingerRouterProbe {
         boolean wantsAll; Picker(String name) { super(name); }
         boolean wants(float x, float y) { return wantsAll; }
     }
+    static class Touch extends View {
+        int uiFingers;
+        Touch() { super("touch"); }
+    }
     static class Fingers {
         final Map<Integer, View> map = new HashMap<>();
         void clear() { map.clear(); } void put(int id, View v) { map.put(id, v); }
         View get(int id) { return map.get(id); } void remove(int id) { map.remove(id); }
     }
     final Layer buttonLayer = new Layer();
-    final View jump = new View("jump", 900, 400, 960, 460), touch = new View("touch");
+    final View jump = new View("jump", 900, 400, 960, 460);
+    final Touch touch = new Touch();
     final View gamepadHelp = new View("gamepad-help");
     final Picker picker = new Picker("picker"), memoryPicker = new Picker("memory");
     final Fingers fingers = new Fingers();
@@ -153,6 +158,11 @@ public class FingerRouterProbe {
         p.picker.wantsAll = false;
         p.route(ev(5, 1, new int[] {7, 8}, new float[] {930, 300}, new float[] {430, 300}));
         assert p.touch.got.get(6).equals("down:8") && p.picker.got.size() == 1;
+        // A fourth finger on a button also invalidates a three-finger map tap.
+        p.touch.uiFingers = 3;
+        p.jump.visibility = VISIBLE;
+        p.route(ev(5, 3, new int[] {7, 8, 9, 10}, new float[] {200, 300, 400, 930}, new float[] {300, 300, 300, 430}));
+        assert p.touch.uiFingers == 4;
     }
 }
 ''', encoding="utf-8")

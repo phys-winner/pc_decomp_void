@@ -16,8 +16,13 @@ $keytool = Join-Path $JavaHome 'bin\keytool.exe'
 foreach ($path in @($androidJar, $javac, $java, $keytool, "$tools\aapt2.exe", "$tools\d8.bat", "$tools\zipalign.exe", "$tools\apksigner.bat")) {
     if (!(Test-Path -LiteralPath $path)) { throw "Required build tool missing: $path" }
 }
-if ($Install -and !$Serial) { throw 'Install requires explicit -Serial SERIAL.' }
+if ($Install -and !$Serial) { throw 'Install requires an explicit -Serial.' }
 if ($NativeLibrary -and !(Test-Path -LiteralPath $NativeLibrary -PathType Leaf)) { throw "Native library missing: $NativeLibrary" }
+$signerJson = & python (Join-Path $PSScriptRoot 'debug_signer.py') --project $project --keytool $keytool
+if ($LASTEXITCODE -ne 0) { throw 'Protected project debug signer validation failed; no key was changed.' }
+$signer = $signerJson | ConvertFrom-Json
+$keystore = $signer.keystore
+Write-Output "Debug signer certificate SHA-256: $($signer.certificate_sha256)"
 foreach ($directory in @($build, "$build\classes", "$build\dex", "$build\testclasses", "$build\generated")) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
@@ -46,10 +51,6 @@ try {
     }
 } finally { $archive.Dispose() }
 Run "$tools\zipalign.exe" @('-f', '-p', '4', "$build\unsigned.apk", "$build\aligned.apk")
-$keystore = "$build\debug.keystore"
-if (!(Test-Path -LiteralPath $keystore)) {
-    Run $keytool @('-genkeypair', '-keystore', $keystore, '-storepass', 'android', '-keypass', 'android', '-alias', 'androiddebugkey', '-keyalg', 'RSA', '-keysize', '2048', '-validity', '10000', '-dname', 'CN=The Void Port Input Test')
-}
 $apk = "$build\the-void-input-test.apk"
 Run "$tools\apksigner.bat" @('sign', '--ks', $keystore, '--ks-pass', 'pass:android', '--key-pass', 'pass:android', '--out', $apk, "$build\aligned.apk")
 Run "$tools\apksigner.bat" @('verify', '--verbose', $apk)

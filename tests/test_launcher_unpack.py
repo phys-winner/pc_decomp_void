@@ -450,7 +450,7 @@ def check_full(archive, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--full", type=Path, help="a whole game archive to unpack and compare")
-    parser.add_argument("--source", type=Path, default=ROOT / "original/the-void-russian")
+    parser.add_argument("--source", type=Path, default=Path(r"C:\Program Files (x86)\Steam\steamapps\common\The Void"))
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")   # the release's titles
     OUT.mkdir(parents=True, exist_ok=True)

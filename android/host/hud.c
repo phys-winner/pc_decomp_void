@@ -37,7 +37,9 @@ static const struct { const char *name; uint32_t tag, slot; } wanted[] = {
     {"textures\\ui\\ui_flimfa_right_up.tex", HUD_MEMORY | HUD_BODY_DECOR, 0},
     {"textures\\ui\\mainmenu_options.tex", HUD_MENU, HUD_SLOT_MENU + 4},
     {"textures\\ui\\mainmenu_new.tex", HUD_MAINMENU, HUD_SLOT_MENU + 0},
+    {"textures\\ui\\mainmenu_new_ru.tex", HUD_MAINMENU, HUD_SLOT_MENU + 0},
     {"textures\\ui\\mainmenu_continue.tex", HUD_PAUSE, HUD_SLOT_MENU + 6},
+    {"textures\\ui\\mainmenu_continue_ru.tex", HUD_PAUSE, HUD_SLOT_MENU + 6},
     {"textures\\ui\\mainmenu_load.tex", 0, HUD_SLOT_MENU + 1},
     {"textures\\ui\\mainmenu_save.tex", 0, HUD_SLOT_MENU + 2},
     {"textures\\ui\\mainmenu_save_gray.tex", 0, HUD_SLOT_MENU + 3},
@@ -139,31 +141,41 @@ static void found(const char *path, uint32_t offset, uint32_t size, void *ctx)
 {
     (void)ctx;
     for (int w = 0; w < WANTED; ++w) {
-        if (strcasecmp(path, wanted[w].name) || known_count >= WANTED) continue;
-        known[known_count].size = size;
-        known[known_count].offset = offset;
-        known[known_count].tag = wanted[w].tag;
-        known[known_count].slot = wanted[w].slot;
-        ++known_count;
+        if (strcasecmp(path, wanted[w].name)) continue;
+        known[w].size = size;
+        known[w].offset = offset;
     }
 }
 
 static void load_table(void)
 {
     FILE *f = void_vfs_open("Textures.vfs");
-    if (!f) { void_log("[hud] no data/Textures.vfs: cursor and helpers are not recognised"); return; }
-    if (!void_vfs_scan(f, "textures", found, NULL)) void_log("[hud] Textures.vfs: unreadable directory");
-    for (int i = 0; i < known_count; ++i) {
-        uint8_t *data = malloc(known[i].size);
-        if (data && fseek(f, (long)known[i].offset, SEEK_SET) == 0 && fread(data, 1, known[i].size, f) == known[i].size) {
+    if (f && !void_vfs_scan(f, "textures", found, NULL)) void_log("[hud] Textures.vfs: unreadable directory");
+    for (int i = 0; i < WANTED; ++i) {
+        char path[1200];
+        snprintf(path, sizeof path, "C:\\Games\\The Void\\data\\%s", wanted[i].name);
+        char *host = void_path_to_host(path);
+        FILE *loose = host ? fopen(host, "rb") : NULL;
+        free(host);
+        FILE *image = loose ? loose : f;
+        uint32_t offset = known[i].offset;
+        if (loose) {
+            long size = fseek(loose, 0, SEEK_END) ? -1 : ftell(loose);
+            known[i].size = size > 0 && (uint64_t)size <= UINT32_MAX ? (uint32_t)size : 0;
+            offset = 0;
+        }
+        uint8_t *data = known[i].size && image ? malloc(known[i].size) : NULL;
+        if (data && fseek(image, (long)offset, SEEK_SET) == 0 && fread(data, 1, known[i].size, image) == known[i].size) {
             known[i].prefix = fnv64(data, known[i].size < PREFIX ? known[i].size : PREFIX);
             known[i].hash = fnv64(data, known[i].size);
-        } else {
-            known[i].tag = known[i].slot = 0;
+            known[i].tag = wanted[i].tag;
+            known[i].slot = wanted[i].slot;
+            ++known_count;
         }
         free(data);
+        if (loose) fclose(loose);
     }
-    fclose(f);
+    if (f) fclose(f);
     void_log("[hud] %d of %d cursor, helper and screen images recognised by content", known_count, WANTED);
 }
 
@@ -173,7 +185,7 @@ uint32_t void_hud_tag_for(const uint8_t *data, uint32_t size, uint32_t *slot)
     uint64_t prefix = 0, h = 0;
     int prefixed = 0, hashed = 0;
     uint32_t tag = 0, s = 0;
-    for (int i = 0; i < known_count; ++i) {
+    for (int i = 0; i < WANTED; ++i) {
         if (known[i].size != size || !(known[i].tag | known[i].slot)) continue;
         if (!prefixed) { prefix = fnv64(data, size < PREFIX ? size : PREFIX); prefixed = 1; }
         if (prefix != known[i].prefix) continue;

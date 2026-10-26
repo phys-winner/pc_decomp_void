@@ -38,8 +38,10 @@ static uint32_t make_buffer(const void *bytes, uint32_t size)
     result_data[size] = 0;
     return 1;
 }
+static unsigned cache_file_probes;
 static char *read_all(const char *path, size_t *size)
 {
+    ++cache_file_probes;
     FILE *file = fopen(path, "rb");
     if (!file) return NULL;
     assert(!fseek(file, 0, SEEK_END));
@@ -97,13 +99,16 @@ int main(int argc, char **argv)
     assert(!_mkdir(packaged));
 
     expect(0, 0, NULL);
+    assert(cache_file_probes == 2); /* One .bin and one .err, without repeating .bin. */
     put(packaged, "bin", "packaged-bytecode");
     expect(0, 0, NULL); /* CLI never reads an Android cache implicitly. */
     void_d3dx_set_packaged_cache_dir(packaged);
     expect(1, 0, "packaged-bytecode");
     erase(packaged, "bin");
     put(packaged, "err", "hr=8876086c\npackaged-error");
+    unsigned previous_probes = cache_file_probes;
     expect(-1, 0x8876086cu, "packaged-error");
+    assert(cache_file_probes - previous_probes == 4); /* Profile/bundle .bin, then profile/bundle .err. */
     put(profile_cache, "bin", "profile-bytecode");
     expect(1, 0, "profile-bytecode");
     erase(profile_cache, "bin");

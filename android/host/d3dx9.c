@@ -662,15 +662,18 @@ static int cache_answer_in(const char *dir, uint64_t h, uint32_t *out, uint32_t 
 {
     char path[1200];
     size_t size = 0;
-    snprintf(path, sizeof path, "%s/%016llx.bin", dir, (unsigned long long)h);
-    char *blob = read_all(path, &size);
-    if (blob && size && (!binary || cache_bytecode_valid(blob, size))) {
-        *out = make_buffer(blob, (uint32_t)size);
+    char *blob;
+    if (!errors) {
+        snprintf(path, sizeof path, "%s/%016llx.bin", dir, (unsigned long long)h);
+        blob = read_all(path, &size);
+        if (blob && size && (!binary || cache_bytecode_valid(blob, size))) {
+            *out = make_buffer(blob, (uint32_t)size);
+            free(blob);
+            return 1;
+        }
         free(blob);
-        return 1;
+        return 0;
     }
-    free(blob);
-    if (!errors) return 0;
     snprintf(path, sizeof path, "%s/%016llx.err", dir, (unsigned long long)h);
     blob = read_all(path, &size);
     if (!blob || !size) { free(blob); return 0; }
