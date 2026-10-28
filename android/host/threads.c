@@ -805,9 +805,23 @@ static void big_cores_init(void)
         use_capacity ? "capacity" : "max frequency", best, worst);
 }
 
+/* The shader compile service's process (main.c) leaves the big cores to the
+ * game: its guest thread runs on the others. */
+static int small_cores_wanted;
+
+void void_threads_prefer_small_cores(void) { small_cores_wanted = 1; }
+
 static void pin_guest_thread(void)
 {
     pthread_once(&big_cores_once, big_cores_init);
+    if (small_cores_wanted && big_cores_count && host_cores_valid) {
+        cpu_set_t small;
+        CPU_ZERO(&small);
+        for (int i = 0; i < CPU_SETSIZE; ++i)
+            if (CPU_ISSET(i, &host_cores) && !CPU_ISSET(i, &big_cores)) CPU_SET(i, &small);
+        if (CPU_COUNT(&small)) sched_setaffinity(0, sizeof small, &small);
+        return;
+    }
     if (big_cores_count) sched_setaffinity(0, sizeof big_cores, &big_cores);
 }
 

@@ -1,0 +1,6 @@
+[submodule "reference/astcenc"]
+	path = reference/astcenc
+	url = https://github.com/ARM-software/astc-encoder.git
+[submodule "reference/etcpak"]
+	path = reference/etcpak
+	url = https://github.com/wolfpld/etcpak.git

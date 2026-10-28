@@ -39,5 +39,30 @@
     "directory": "reference/libtheora",
     "license": "BSD-3-Clause",
     "note": "v1.0, the version in Video.dll; lib/dec/idct.c used unmodified by android/host/theora_native.c"
+  },
+  "astcenc": {
+    "url": "https://github.com/ARM-software/astc-encoder",
+    "version": "5.7.0",
+    "revision": "baff485b0ff36d2f95d28961605106502c653966",
+    "directory": "reference/astcenc",
+    "license": "Apache-2.0",
+    "submodule": true,
+    "note": "upstream 5.7.0 submodule; Source/astcenc_*.cpp supplies the launcher's ASTC 4x4 texture conversion (android/texconv), compiled for NEON; used unmodified"
+  },
+  "etcpak": {
+    "url": "https://github.com/wolfpld/etcpak",
+    "revision": "3d716e1550023dc5ff8b602636af8b76584e0b66",
+    "directory": "reference/etcpak",
+    "license": "BSD-3-Clause",
+    "submodule": true,
+    "note": "upstream submodule; the launcher's ETC2 texture conversion (android/texconv); used unmodified"
+  },
+  "bcdec": {
+    "url": "https://github.com/iOrange/bcdec",
+    "version": "0.96",
+    "file": "reference/etcpak/bcdec.h",
+    "license": "MIT OR Unlicense",
+    "vendored": true,
+    "note": "bundled by the pinned etcpak submodule; included by Decode.cpp"
   }
 }

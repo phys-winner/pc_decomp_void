@@ -45,7 +45,11 @@ for index, lang in INDEXES.items():
     drawn = []
 
     # The camera's projection gives float pixels; the published place is whole pixels.
-    hero = {"makeAttachPoint": lambda name: {"Position": (100.75 + int(name[7:]) * 50, 200.5)}}
+    # The hero's points are pt_zone1..pt_zone21 for the zones 0..20 in both
+    # games (Properties\Actors\hero_last.xml); no other name is a point.
+    first = 1
+    hero = {"makeAttachPoint": lambda name: {"Position": (100.75 + (int(name[7:]) - first) * 50, 200.5)}
+            if first <= int(name[7:]) <= 20 + first else None}
     class Request:
         asInt = 0
     request = Request()

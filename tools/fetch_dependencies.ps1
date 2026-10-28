@@ -2,7 +2,17 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $dependencies = Get-Content -LiteralPath (Join-Path $projectRoot 'dependencies.json') -Raw | ConvertFrom-Json
 foreach ($dependency in $dependencies.PSObject.Properties.Value) {
+    if ($dependency.vendored) {
+        # Bundled file provided by a pinned dependency (bcdec within etcpak).
+        $vendoredPath = Join-Path $projectRoot $(if ($dependency.directory) { $dependency.directory } else { $dependency.file })
+        if (!(Test-Path -LiteralPath $vendoredPath)) { throw "Missing vendored dependency: $vendoredPath" }
+        continue
+    }
     $dependencyPath = Join-Path $projectRoot $dependency.directory
+    if ($dependency.submodule -and !(Test-Path -LiteralPath (Join-Path $dependencyPath '.git'))) {
+        & git -C $projectRoot submodule update --init --checkout -- $dependency.directory
+        if ($LASTEXITCODE) { throw "Dependency submodule initialization failed: $($dependency.directory)" }
+    }
     if (!$dependency.revision) {
         $source = Join-Path $dependencyPath 'malloc.c'
         if (!(Test-Path -LiteralPath $source)) {

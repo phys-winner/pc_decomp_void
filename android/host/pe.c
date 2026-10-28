@@ -319,10 +319,13 @@ static void add_pseudo(const char *name)
     MEM32(m->base + 0x98 + 0x38) = 0x1000;
 }
 
-int void_modules_init(const char *image_dir)
+/* only: one lifted DLL, with Game.exe for the process's module handle but
+ * without its imports (the shader compile service maps only the compiler). */
+static int modules_init(const char *image_dir, const char *only)
 {
     for (size_t i = 0; i < sizeof pseudo_names / sizeof pseudo_names[0]; ++i) add_pseudo(pseudo_names[i]);
     for (size_t i = 0; i < sizeof lifted / sizeof lifted[0]; ++i) {
+        if (only && !lifted[i].exe && strcasecmp(lifted[i].name, only)) continue;
         void_module *m = &modules[module_count++];
         memset(m, 0, sizeof *m);
         snprintf(m->name, sizeof m->name, "%s", lifted[i].name);
@@ -340,7 +343,8 @@ int void_modules_init(const char *image_dir)
         void_log("[void] mapped %s at %08X size %08X entry %08X", m->name, m->base, m->size, m->entry);
     }
     int ok = 1;
-    for (int i = 0; i < module_count; ++i) if (modules[i].kind != MOD_PSEUDO) ok &= bind_imports(&modules[i]);
+    for (int i = 0; i < module_count; ++i)
+        if (modules[i].kind != MOD_PSEUDO && !(only && modules[i].kind == MOD_LIFTED_EXE)) ok &= bind_imports(&modules[i]);
     if (!ok) return 0;
     for (int i = 0; i < module_count; ++i) {
         void_module *m = &modules[i];
@@ -358,6 +362,9 @@ int void_modules_init(const char *image_dir)
     }
     return 1;
 }
+
+int void_modules_init(const char *image_dir) { return modules_init(image_dir, NULL); }
+int void_modules_init_only(const char *image_dir, const char *only) { return modules_init(image_dir, only); }
 
 /* ------------------------------------------------------------ lifecycle */
 static uint32_t dll_event(void_module *m, uint32_t reason, uint32_t reserved)

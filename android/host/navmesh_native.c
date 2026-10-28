@@ -28,7 +28,9 @@
 #define RECOMP_MEM_QUAL
 #endif
 
-#ifndef VOID_RELEASE
+#ifdef VOID_RELEASE
+#include "release_overrides.h"   /* the test's twin in another release (tools/lift_release.py) */
+#else
 #define ENGINE_NAVMESH_LEAF sub_110EC930           /* the 2009 Engine.dll */
 #define ENGINE_NAVMESH_LEAF_LIFTED sub_110EC930_lifted
 #define ENGINE_EPSILON 0x11122974u                  /* float 1e-6 */

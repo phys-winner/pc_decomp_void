@@ -96,6 +96,13 @@ public class Context {
         "android/util/Log.java": '''package android.util;
 public class Log {public static int w(String tag,String message) {throw new AssertionError(message);}}
 ''',
+        "android/view/Display.java": '''package android.view;
+public class Display {
+ public static class Mode {
+  public int getPhysicalWidth() {return 0;} public int getPhysicalHeight() {return 0;} public float getRefreshRate() {return 60;}
+ }
+ public Mode getMode() {return new Mode();} public Mode[] getSupportedModes() {return new Mode[0];}
+}''',
         "org/thevoid/port/GameActivity.java": '''package org.thevoid.port;
 import java.io.*;
 class GameActivity {static String[] nativeHintTexts() {return new String[56];} static class Release {

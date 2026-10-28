@@ -1,5 +1,23 @@
 # pc_decomp_void
 
+## Version 0.3-dev
+
+Missing shader variants compile in a separate process on small CPU cores, with
+private learned caches, a pregenerated shader pack and additional GL warm-up recipes.
+The launcher can convert textures to ASTC 4x4 or ETC2, report GPU support and control FPS.
+This release also adds adaptive physics timing, x4 anisotropy defaults, water-reflection
+controls, region-lighting caching, body-screen/map-picture fixes and corresponding
+Tension improvements. See [CHANGELOG.md](CHANGELOG.md) for the complete release notes
+and [TECHDEBT-2008.md](TECHDEBT-2008.md) for remaining Tension work.
+
+The texture encoders are pinned upstream Git submodules: ASTC Encoder 5.7.0
+(`baff485b0ff36d2f95d28961605106502c653966`) and etcpak
+(`3d716e1550023dc5ff8b602636af8b76584e0b66`, including bcdec). Initialize them with
+`git submodule update --init --recursive`; dependency fetching also initializes
+missing submodules and checks their revisions. No copied encoder sources are tracked
+in the parent repository. `STATE.md` and `research/` remain local and ignored.
+
+
 Native Android ARM64 port of **The Void**, built by statically recompiling the
 original PC x86 executables to C and providing an Android Win32 compatibility
 layer. The launcher can also run the separate **Tension (2008)** build.
@@ -16,7 +34,7 @@ rights holders. Game names and original content belong to their respective owner
 
 ## Status
 
-Current version: **0.2-dev** (`versionCode=3`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
+Current version: **0.3-dev** (`versionCode=4`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
 sideloading, signed with a local development key.
 
 - Original x86 game logic is translated ahead of time with
@@ -182,7 +200,7 @@ Keep all signing keys out of version control.
    the game data you intend to run.
 
 The APK is written to **`build/android-game/the-void.apk`**. A complete build
-also writes **`pub/the-void-0.2-dev-<sha256-prefix>.apk`**. The eight-character
+also writes **`pub/the-void-0.3-dev-<sha256-prefix>.apk`**. The eight-character
 suffix is the first eight hexadecimal characters of the signed APK's SHA-256.
 
 To limit native compilation parallelism, build first and package those libraries:
@@ -253,7 +271,7 @@ not contact a phone. No device identifier belongs in tracked configuration.
 
 ## Versioning and checks
 
-Versions follow `0.1-dev`, `0.2-dev`, `0.3-dev`, and so on, with Android version
+Versions follow `0.1-dev`, `0.3-dev`, `0.3-dev`, and so on, with Android version
 codes `2`, `3`, `4`, respectively (`versionCode = minor + 1`). The source of
 truth is `android/app/AndroidManifest.xml`. Rebuilding does not bump the version.
 

@@ -65,6 +65,12 @@ def main():
     for name in ('sub_160D6ED0',) + (('sub_1105E810',) if engine_native else ()):
         helpers = helpers.replace('void ' + name + '(void)', 'void ' + name + '_lifted(void)', 1)
     native = native_path.read_text().replace('#include "host.h"', '#define GUEST_USER_TOP 0x7ffe0000u')
+    # The walk cache (RENDERER_REGION_WALK) reads the profile and the frame counter
+    # of the host; tests/test_region_walk is not this probe's.
+    native = native.replace('#include <unistd.h>\n', '')
+    native, count = re.subn(r'^/\* ---- the per-object region walk, remembered ----.*?(?=^#else)', '', native,
+                            flags=re.M | re.S)
+    assert count == 1
     assert image.u32(0x162d2a64) == 0x3f7fffef
     kernel = private_renderer_sat(paths[1].read_bytes())
     # Every generated scratch/input access must stay within its native object.
@@ -80,7 +86,8 @@ def main():
         pass
     else:
         raise AssertionError('changed SAT body was accepted')
-    native = re.sub(r'^void sub_16013760\(void\)\n\{.*?^\}', '', native, flags=re.M | re.S)
+    native, count = re.subn(r'^void RENDERER_REGION_LIGHT\(void\)\n\{.*?^\}', '', native, flags=re.M | re.S)
+    assert count == 1
     checks = (ROOT / 'tests/region_native_checks.c').read_text()
     driver = (ROOT / 'tests/region_native_probe.c').read_text()
     _, env, _ = compiler_environment()

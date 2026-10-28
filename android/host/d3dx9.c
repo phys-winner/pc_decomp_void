@@ -7,10 +7,21 @@
 #define _GNU_SOURCE
 #include "d3d9_internal.h"
 #include "hud.h"
+#include "../texconv/tvtx.h"
+#include "vfs_dir.h"
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <time.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <linux/futex.h>
+#include <pthread.h>
+#include <signal.h>
+#include <strings.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #define D3DX "d3dx9_36.dll"
@@ -22,6 +33,13 @@ static _Atomic uint64_t missing_shader;
 static _Atomic uint64_t missing_family;
 uint64_t void_d3dx_missing_shader(void) { return atomic_load_explicit(&missing_shader, memory_order_relaxed); }
 static char packaged_cache_dir[1024];
+/* The answers this device compiled itself (in the frame, or the compile
+ * service): <files>/shaderlearned, in the app's private storage. Through
+ * shared storage's FUSE creating such a file cost tens of milliseconds of the
+ * frame, and the media provider's bookkeeping of every new file slowed the
+ * game's loading while the service wrote answers. The answers are keyed by
+ * their input, so both games share the folder. Empty: the profile's cache. */
+static char learned_cache_dir[1100];
 
 static void shader_missing(uint64_t key, int missing)
 {
@@ -54,6 +72,15 @@ static void shader_family_result(uint64_t key, uint64_t family, int missing)
 void void_d3dx_set_packaged_cache_dir(const char *dir)
 {
     snprintf(packaged_cache_dir, sizeof packaged_cache_dir, "%s", dir ? dir : "");
+}
+
+/* A path in the app's files folder: shaderlearned is made next to it. */
+void void_d3dx_set_learned_cache_dir(const char *sibling)
+{
+    const char *slash = sibling ? strrchr(sibling, '/') : NULL;
+    if (!slash) return;
+    snprintf(learned_cache_dir, sizeof learned_cache_dir, "%.*s/shaderlearned", (int)(slash - sibling), sibling);
+    if (mkdir(learned_cache_dir, 0700) && errno != EEXIST) learned_cache_dir[0] = 0;
 }
 
 const char *void_d3dx_packaged_cache_dir(void) { return packaged_cache_dir; }
@@ -658,6 +685,21 @@ static int cache_bytecode_valid(const char *bytes, size_t size)
     return (type == 0xfffe || type == 0xffff || type == 0x5458) && major >= 1 && major <= 3 && end == 0x0000ffff;
 }
 
+/* Windows' error for a shader ("hr=XXXXXXXX" then the messages) as the game sees it. */
+static void error_answer(const char *blob, size_t size, uint32_t *out, uint32_t *hr)
+{
+    unsigned long code = 0;
+    const char *messages = blob;
+    if (sscanf(blob, "hr=%lx", &code) == 1) {
+        const char *nl = memchr(blob, '\n', size);
+        messages = nl ? nl + 1 : blob + size;
+    }
+    *hr = code ? (uint32_t)code : E_FAIL_;
+    size_t n = size - (size_t)(messages - blob);
+    *out = make_buffer(messages, (uint32_t)n + 1);
+    ((char *)GPTR(((dxbuffer_t *)void_com_host(*out))->data))[n] = 0;
+}
+
 static int cache_answer_in(const char *dir, uint64_t h, uint32_t *out, uint32_t *hr, int errors, int binary)
 {
     char path[1200];
@@ -677,18 +719,90 @@ static int cache_answer_in(const char *dir, uint64_t h, uint32_t *out, uint32_t 
     snprintf(path, sizeof path, "%s/%016llx.err", dir, (unsigned long long)h);
     blob = read_all(path, &size);
     if (!blob || !size) { free(blob); return 0; }
-    unsigned long code = 0;
-    char *messages = blob;
-    if (sscanf(blob, "hr=%lx", &code) == 1) {
-        char *nl = memchr(blob, '\n', size);
-        messages = nl ? nl + 1 : blob + size;
-    }
-    *hr = code ? (uint32_t)code : E_FAIL_;
-    size_t n = size - (size_t)(messages - blob);
-    *out = make_buffer(messages, (uint32_t)n + 1);
-    ((char *)GPTR(((dxbuffer_t *)void_com_host(*out))->data))[n] = 0;
+    error_answer(blob, size, out, hr);
     free(blob);
     return -1;
+}
+
+/* ---- the APK's pregenerated variants: files/shaderpack.bin ----
+ * Written by tools/build_game_apk.py (shader_pack): "VSPK", version 1, the
+ * entry count; entries sorted by key {u64 key, u32 size, u32 kind (0
+ * bytecode, 1 Windows' error text), u64 offset}; then the contents. Read
+ * where the cache folders have no answer; the menu's warm-up never sees it. */
+static struct { int tried, fd; uint32_t count; uint8_t *index; } shader_pack = {0, -1, 0, NULL};
+
+static void shader_pack_open(void)
+{
+    shader_pack.tried = 1;
+    if (!packaged_cache_dir[0]) return;
+    char path[1200];
+    snprintf(path, sizeof path, "%s/../shaderpack.bin", packaged_cache_dir);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    uint32_t h[4];
+    struct stat st;
+    const char *why = NULL;
+    uint8_t *index = NULL;
+    if (fstat(fd, &st) || pread(fd, h, sizeof h, 0) != (ssize_t)sizeof h) why = "unreadable";
+    else if (h[0] != 0x4B505356u || h[1] != 1) why = "not a shader pack of this version";
+    else if (16u + (uint64_t)h[2] * 24u > (uint64_t)st.st_size) why = "truncated";
+    else if (h[2]) {
+        size_t bytes = (size_t)h[2] * 24u;
+        index = (uint8_t *)malloc(bytes);
+        if (!index || pread(fd, index, bytes, 16) != (ssize_t)bytes) why = "its index is unreadable";
+        for (uint32_t i = 0; !why && i < h[2]; ++i) {
+            uint64_t key, offset, prev;
+            uint32_t size, kind;
+            memcpy(&key, index + i * 24u, 8); memcpy(&size, index + i * 24u + 8, 4);
+            memcpy(&kind, index + i * 24u + 12, 4); memcpy(&offset, index + i * 24u + 16, 8);
+            if (i) memcpy(&prev, index + (i - 1) * 24u, 8);
+            if ((i && prev >= key) || kind > 1 || !size || size > 0x400000u || offset + size > (uint64_t)st.st_size)
+                why = "its index is damaged";
+        }
+    }
+    if (why) {
+        void_log("[d3dx] %s: %s", path, why);
+        free(index);
+        close(fd);
+        return;
+    }
+    shader_pack.fd = fd;
+    shader_pack.count = h[2];
+    shader_pack.index = index;
+    void_log("[d3dx] shader pack: %u pregenerated answers (%.1f MB)", h[2], (double)st.st_size / 1e6);
+}
+
+static int shader_pack_answer(uint64_t h, uint32_t *out, uint32_t *hr, int binary)
+{
+    if (!shader_pack.tried) shader_pack_open();
+    if (!shader_pack.index) return 0;
+    uint32_t lo = 0, hi = shader_pack.count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        uint64_t key;
+        memcpy(&key, shader_pack.index + mid * 24u, 8);
+        if (key < h) lo = mid + 1; else hi = mid;
+    }
+    uint64_t key = 0, offset;
+    uint32_t size, kind;
+    if (lo < shader_pack.count) memcpy(&key, shader_pack.index + lo * 24u, 8);
+    if (lo >= shader_pack.count || key != h) return 0;
+    memcpy(&size, shader_pack.index + lo * 24u + 8, 4);
+    memcpy(&kind, shader_pack.index + lo * 24u + 12, 4);
+    memcpy(&offset, shader_pack.index + lo * 24u + 16, 8);
+    char *blob = (char *)malloc(size + 1u);
+    if (!blob || pread(shader_pack.fd, blob, size, (off_t)offset) != (ssize_t)size) { free(blob); return 0; }
+    blob[size] = 0;
+    int answer = 0;
+    if (kind == 0 && (!binary || cache_bytecode_valid(blob, size))) {
+        *out = make_buffer(blob, size);
+        answer = 1;
+    } else if (kind == 1) {
+        error_answer(blob, size, out, hr);
+        answer = -1;
+    }
+    free(blob);
+    return answer;
 }
 
 /* A development switch (a <data>/shadercache/no-bundle file, like the wait
@@ -712,10 +826,13 @@ static int cache_answer(uint64_t h, uint32_t *out, uint32_t *hr, int binary)
     snprintf(profile, sizeof profile, "%s/shadercache", void_data_dir());
     int packaged = packaged_cache_dir[0] && !bundle_disabled();
     /* A corrected bundled success supersedes an older recorded compile failure. */
-    int answer = cache_answer_in(profile, h, out, hr, 0, binary);
+    int answer = learned_cache_dir[0] ? cache_answer_in(learned_cache_dir, h, out, hr, 0, binary) : 0;
+    if (!answer) answer = cache_answer_in(profile, h, out, hr, 0, binary);
     if (!answer && packaged) answer = cache_answer_in(packaged_cache_dir, h, out, hr, 0, binary);
+    if (!answer && learned_cache_dir[0]) answer = cache_answer_in(learned_cache_dir, h, out, hr, 1, binary);
     if (!answer) answer = cache_answer_in(profile, h, out, hr, 1, binary);
     if (!answer && packaged) answer = cache_answer_in(packaged_cache_dir, h, out, hr, 1, binary);
+    if (!answer && packaged) answer = shader_pack_answer(h, out, hr, binary);
     if (answer) atomic_fetch_add_explicit(&cache_responses, 1, memory_order_relaxed);
     return answer;
 }
@@ -773,6 +890,185 @@ static void miss_note(uint64_t h, uint64_t now, int missing)
     misses[free_at].at = now;
 }
 
+/* ---- the compile service's page ----
+ * The game and its compile service (ShaderCompilerService.java, a process of
+ * its own) share a page in the app's private storage: the service's
+ * heartbeat, the variants the game handed over (each request a file in
+ * <profile>/shadercache/requests, as for the PC tools) and those answered
+ * (the answer a file in the profile's cache). Looking at it costs no
+ * shared-storage lookups, each a few tenths of a millisecond through
+ * Android's FUSE, so a variant can be asked about in every frame. The game
+ * makes the page anew for each run: a service left from an earlier run keeps
+ * its own. */
+#define RING_MAGIC 0x56535652u
+#define RING_VERSION 1u
+#define RING_SLOTS 1024u
+typedef struct {
+    _Atomic uint32_t magic;
+    uint32_t version;
+    _Atomic uint32_t client, server;     /* the game's and the service's process ids */
+    _Atomic uint64_t beat;               /* the service's CLOCK_MONOTONIC, four times a second */
+    _Atomic uint32_t posted, answered;   /* counts; a slot is written before its count grows */
+    uint64_t requests[RING_SLOTS], answers[RING_SLOTS];
+} service_ring;
+static service_ring *ring;
+/* The requests the game hands over: next to the page, in the app's private
+ * storage (a request through shared storage's FUSE took some 25 ms of the
+ * frame on a POCO X3). */
+static char ring_requests[1100];
+
+static void ring_requests_dir(const char *page)
+{
+    const char *slash = strrchr(page, '/');
+    snprintf(ring_requests, sizeof ring_requests, "%.*s/shaderrequests", slash ? (int)(slash - page) : 0, page);
+    mkdir(ring_requests, 0700);
+}
+
+static uint64_t ring_clock(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+
+static service_ring *ring_map(const char *path, int create)
+{
+    int fd = create ? open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600) : open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if ((create && ftruncate(fd, (off_t)sizeof(service_ring))) || fstat(fd, &st) ||
+        st.st_size < (off_t)sizeof(service_ring)) {
+        close(fd);
+        return NULL;
+    }
+    void *page = mmap(NULL, sizeof(service_ring), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    return page == MAP_FAILED ? NULL : (service_ring *)page;
+}
+
+/* GameActivity: this run's page, before the game starts. */
+int void_d3dx_set_service_ring(const char *path)
+{
+    unlink(path);
+    ring = ring_map(path, 1);
+    if (!ring) return 0;
+    ring_requests_dir(path);
+    ring->version = RING_VERSION;
+    atomic_store_explicit(&ring->client, (uint32_t)getpid(), memory_order_relaxed);
+    atomic_store_explicit(&ring->magic, RING_MAGIC, memory_order_release);
+    return 1;
+}
+
+/* The service beats four times a second; two seconds without, it is gone. */
+static int service_alive(void)
+{
+    if (!ring) return 0;
+    uint64_t beat = atomic_load_explicit(&ring->beat, memory_order_acquire);
+    int alive = beat && ring_clock() - beat < 2000000000ull;
+    static int was;
+    if (alive != was) void_log("[d3dx] compile service %s", alive ? "answering" : "gone: compiling here");
+    was = alive;
+    return alive;
+}
+
+/* Variants handed to the service, until it answers them. With nothing
+ * answered at all for ten seconds (a compile that does not end) a variant is
+ * compiled here after all; with the service gone, at once. */
+#define PENDING_SLOTS 256u
+#define PENDING_PATIENCE_NS 10000000000ull
+enum { SERVICE_NONE, SERVICE_WAITING, SERVICE_ANSWERED, SERVICE_LATE };
+static struct { uint64_t key, since; uint32_t from; } pending[PENDING_SLOTS];
+static uint32_t pending_count, answered_seen;
+static uint64_t answered_at;
+
+static int pending_find(uint64_t h)
+{
+    for (uint32_t i = 0; i < pending_count; ++i) if (pending[i].key == h) return (int)i;
+    return -1;
+}
+
+static int pending_state(int i, uint64_t now)
+{
+    uint32_t answered = atomic_load_explicit(&ring->answered, memory_order_acquire);
+    if (answered != answered_seen) { answered_seen = answered; answered_at = now; }
+    if (answered - pending[i].from > RING_SLOTS) return SERVICE_ANSWERED;   /* its slot may be reused: look */
+    for (uint32_t n = pending[i].from; n != answered; ++n)
+        if (ring->answers[n % RING_SLOTS] == pending[i].key) return SERVICE_ANSWERED;
+    if (!service_alive()) return SERVICE_LATE;
+    uint64_t last = pending[i].since > answered_at ? pending[i].since : answered_at;
+    return now - last >= PENDING_PATIENCE_NS ? SERVICE_LATE : SERVICE_WAITING;
+}
+
+static void pending_drop(int i) { pending[i] = pending[--pending_count]; }
+
+static void service_wake(uint64_t h)
+{
+    uint32_t posted = atomic_load_explicit(&ring->posted, memory_order_relaxed);
+    ring->requests[posted % RING_SLOTS] = h;
+    atomic_store_explicit(&ring->posted, posted + 1u, memory_order_release);
+    syscall(SYS_futex, (uint32_t *)&ring->posted, FUTEX_WAKE, 1, NULL, NULL, 0);
+}
+
+static int service_post(uint64_t h, uint64_t now)
+{
+    if (pending_count == PENDING_SLOTS) return 0;
+    uint32_t from = atomic_load_explicit(&ring->answered, memory_order_acquire);
+    service_wake(h);
+    pending[pending_count].key = h;
+    pending[pending_count].since = now;
+    pending[pending_count].from = from;
+    ++pending_count;
+    return 1;
+}
+
+/* RendererD3D's pass builder (renderer_native.c, sub_161FCEC0) asks again in
+ * the next frame for an effect it could not build: within it a variant the
+ * cache lacks goes to the service, and once one has, the builder's other
+ * attempts fail at once (void_d3dx_async_aborted). Elsewhere a miss is
+ * compiled here as before: other callers need not ask again. */
+static struct { int active, aborted; uint32_t esp; pthread_t thread; uint64_t key; } scope;
+static int handed;   /* the last miss went to the service */
+
+void void_d3dx_async_begin(uint32_t esp)
+{
+    scope.active = 1;
+    scope.aborted = 0;
+    scope.esp = esp;
+    scope.thread = pthread_self();
+    scope.key = 0;
+}
+
+/* The first variant the build handed to the service, or 0. */
+uint64_t void_d3dx_async_end(void)
+{
+    uint64_t key = scope.key;
+    scope.active = scope.aborted = 0;
+    scope.key = 0;
+    return key;
+}
+
+/* Within the builder: its thread, deeper on its stack. */
+static int async_here(void)
+{
+    return scope.active && pthread_equal(scope.thread, pthread_self()) && g_esp < scope.esp &&
+        scope.esp - g_esp < 0x40000u;
+}
+
+int void_d3dx_async_aborted(void) { return scope.aborted && async_here(); }
+
+int void_d3dx_async_waiting(uint64_t key)
+{
+    int i = ring ? pending_find(key) : -1;
+    return i >= 0 && pending_state(i, void_monotonic_ns()) == SERVICE_WAITING;
+}
+
+static void async_handed(uint64_t h)
+{
+    handed = 1;
+    scope.aborted = 1;
+    if (!scope.key) scope.key = h;
+}
+
 /* ---- the lifted Microsoft compiler (tools/lift_d3dx.py), on the device ----
  * d3dxcompiler_void.dll is the November 2007 d3dx9_36.dll lifted under a
  * private name. On a shader cache miss the host loads it (its DllMain and CRT
@@ -789,14 +1085,23 @@ static int d3dx_device_ready(void)
 {
     if (!d3dx_tried) {
         d3dx_tried = 1;
-        /* Opt-in while the lifted compiler is being brought up: it loads and
-         * runs (DllMain, CRT init, the HLSL front end) but still faults deep in
-         * a shader compile, so it runs only when <data>/shadercache/device-compile
-         * exists. Without it a cache miss falls back to the recorded request and
-         * bundled cache, exactly as before -- safe for normal play. */
+        /* On by default: no bundle holds every variant (the lights, shadows
+         * and fog an object meets pick its shader; a predator seen nowhere
+         * during the PC collection had none), and RendererD3D asks again for
+         * a variant it failed to get in every frame that draws with it --
+         * regenerating its text each time, logging it in full, the object
+         * left undrawn (its shadow, another shader, still drawn). A miss now
+         * costs one compile (60-300 ms on a Snapdragon 732G), once per
+         * profile. <data>/shadercache/no-device-compile or
+         * VOID_DEVICE_COMPILE=0 turns it off (development: misses become
+         * requests for tools/shader_service.py again). */
         char p[1200];
-        snprintf(p, sizeof p, "%s/shadercache/device-compile", void_data_dir());
-        if (access(p, F_OK) != 0) return 0;
+        snprintf(p, sizeof p, "%s/shadercache/no-device-compile", void_data_dir());
+        const char *env = getenv("VOID_DEVICE_COMPILE");
+        if ((env && *env == '0') || access(p, F_OK) == 0) {
+            void_log("[d3dx] on-device compiler off");
+            return 0;
+        }
         uint64_t t0 = void_monotonic_ns();
         d3dx_loaded = void_module_load("d3dxcompiler_void.dll") != 0;
         void_log("[d3dx] on-device compiler %s (load %llu ms)", d3dx_loaded ? "ready" : "unavailable",
@@ -843,19 +1148,21 @@ static int d3dx_device_fill(uint64_t h, uint32_t src, uint32_t len, uint32_t def
     uint8_t *message = dxbuf_take(errors, &nerr);   /* errors released either way */
     if (ctab) { uint32_t vt = MEM32(ctab); void_call_guest(MEM32(vt + 8), 1, &ctab, 1); }   /* ID3DXConstantTable::Release (COM: this on the stack) */
     void_gfree(fva); void_gfree(pva); void_gfree(out3);
-    char path[1200], part[1200];
+    char path[1200], part[1200], dir[1100];
+    if (learned_cache_dir[0]) snprintf(dir, sizeof dir, "%s", learned_cache_dir);
+    else snprintf(dir, sizeof dir, "%s/shadercache", void_data_dir());
     int wrote = 0;
     if (bytecode && nbytes) {
-        snprintf(part, sizeof part, "%s/shadercache/%016llx.part", void_data_dir(), (unsigned long long)h);
-        snprintf(path, sizeof path, "%s/shadercache/%016llx.bin", void_data_dir(), (unsigned long long)h);
+        snprintf(part, sizeof part, "%s/%016llx.part", dir, (unsigned long long)h);
+        snprintf(path, sizeof path, "%s/%016llx.bin", dir, (unsigned long long)h);
         FILE *f = fopen(part, "wb");
         if (f) { int ok = fwrite(bytecode, 1, nbytes, f) == nbytes; if (fclose(f)) ok = 0;
             wrote = ok && rename(part, path) == 0; if (!wrote) unlink(part); }
         void_log("[d3dx] compiled %s/%s on the device: %u bytes -> %016llx (%llu ms)", function, profile, nbytes,
             (unsigned long long)h, (unsigned long long)((void_monotonic_ns() - t0) / 1000000ull));
     } else {
-        snprintf(part, sizeof part, "%s/shadercache/%016llx.part", void_data_dir(), (unsigned long long)h);
-        snprintf(path, sizeof path, "%s/shadercache/%016llx.err", void_data_dir(), (unsigned long long)h);
+        snprintf(part, sizeof part, "%s/%016llx.part", dir, (unsigned long long)h);
+        snprintf(path, sizeof path, "%s/%016llx.err", dir, (unsigned long long)h);
         FILE *f = fopen(part, "wb");
         if (f) { int ok = fprintf(f, "hr=%08lX\n", (unsigned long)hr) >= 0;
             if (message && nerr) ok = ok && fwrite(message, 1, nerr, f) == nerr;
@@ -868,9 +1175,279 @@ static int d3dx_device_fill(uint64_t h, uint32_t src, uint32_t len, uint32_t def
     return wrote;
 }
 
+/* ---- the compile service: a process of its own (ShaderCompilerService.java) ----
+ * The same lifted compiler as d3dx_device_fill, on the requests the game
+ * posts in the page (the files <profile>/shadercache/requests/<key>.req, the
+ * format tools/shader_compile_requests.c reads), answered where the game
+ * looks (<key>.bin, or .err with Windows' error). The game draws on
+ * meanwhile; this runs on another core. Requests left in the folder (an
+ * earlier run, the disassemblies the game records) are answered too, every
+ * few seconds when nothing else waits. */
+static uint32_t serve_export(const char *name)
+{
+    uint32_t handle = void_module_handle("d3dxcompiler_void.dll"), n = void_gstrdup(name);
+    uint32_t va = handle ? void_module_proc(handle, n) : 0;
+    void_gfree(n);
+    return va;
+}
+
+static void serve_write(const char *cache, const char *name, const char *suffix, uint32_t hr, const uint8_t *data,
+    uint32_t size, int error)
+{
+    char part[1200], path[1200];
+    snprintf(part, sizeof part, "%s/%.16s.service.part", cache, name);   /* the game's own compile writes <key>.part */
+    snprintf(path, sizeof path, "%s/%.16s%s", cache, name, suffix);
+    FILE *f = fopen(part, "wb");
+    if (!f) return;
+    int ok = 1;
+    if (error) ok = fprintf(f, "hr=%08lX\n", (unsigned long)hr) >= 0;
+    if (data && size) ok = ok && fwrite(data, 1, size, f) == size;
+    if (fclose(f)) ok = 0;
+    if (!ok || rename(part, path)) unlink(part);
+}
+
+static void serve_answered(uint64_t h)
+{
+    uint32_t n = atomic_load_explicit(&ring->answered, memory_order_relaxed);
+    ring->answers[n % RING_SLOTS] = h;
+    atomic_store_explicit(&ring->answered, n + 1u, memory_order_release);
+}
+
+static int serve_key(const char *name, uint64_t *h)
+{
+    if (strlen(name) != 20 || strcmp(name + 16, ".req") || strspn(name, "0123456789abcdef") != 16) return 0;
+    *h = strtoull(name, NULL, 16);
+    return 1;
+}
+
+static int serve_request(const char *cache, const char *requests, const char *name, uint32_t asm_va, uint32_t disasm_va)
+{
+    char path[1200];
+    snprintf(path, sizeof path, "%s/%s", requests, name);
+    size_t size = 0;
+    char *req = read_all(path, &size);
+    if (!req) return 0;
+    char function[256], profile[64], include[16];
+    unsigned flags = 0;
+    size_t mlen = 0, slen = 0;
+    int used = 0;
+    const char *p = req, *end = req + size;
+    if (sscanf(p, "function=%255[^\n]\nprofile=%63[^\n]\nflags=%u\ninclude=%15[^\n]\nmacros=%zu\n%n", function, profile,
+            &flags, include, &mlen, &used) != 5 || !used || mlen > (size_t)(end - p - used)) {
+        void_log("[d3dx] compile service: %s is malformed", name);
+        unlink(path);
+        free(req);
+        return 1;
+    }
+    p += used;
+    const char *macros = p;
+    p += mlen;
+    used = 0;
+    if (sscanf(p, "source=%zu\n%n", &slen, &used) != 1 || !used || slen != (size_t)(end - p - used)) {
+        void_log("[d3dx] compile service: %s has no whole source", name);
+        unlink(path);
+        free(req);
+        return 1;
+    }
+    p += used;
+    uint64_t t0 = void_monotonic_ns();
+    uint32_t src = void_galloc((uint32_t)slen + 4u);
+    memcpy(GPTR(src), p, slen);
+    MEM32(src + (uint32_t)slen) = 0;
+    /* D3DXMACRO pairs from "name=value" lines, then {NULL, NULL}. */
+    uint32_t names[256], values[256], count = 0;
+    for (const char *line = macros; line < macros + mlen && count < 255;) {
+        const char *nl = memchr(line, '\n', (size_t)(macros + mlen - line)), *stop = nl ? nl : macros + mlen;
+        const char *eq = memchr(line, '=', (size_t)(stop - line));
+        if (eq) {
+            char key[512], value[1024];
+            snprintf(key, sizeof key, "%.*s", (int)(eq - line), line);
+            snprintf(value, sizeof value, "%.*s", (int)(stop - eq - 1), eq + 1);
+            names[count] = void_gstrdup(key);
+            values[count] = void_gstrdup(value);
+            ++count;
+        }
+        line = nl ? nl + 1 : stop;
+    }
+    uint32_t defines = void_galloc(8u * (count + 1u));
+    for (uint32_t i = 0; i < count; ++i) { MEM32(defines + 8u * i) = names[i]; MEM32(defines + 8u * i + 4u) = values[i]; }
+    MEM32(defines + 8u * count) = MEM32(defines + 8u * count + 4u) = 0;
+    uint32_t out3 = void_galloc(12), fva = void_gstrdup(function), pva = void_gstrdup(profile), hr;
+    MEM32(out3) = MEM32(out3 + 4) = MEM32(out3 + 8) = 0;
+    if (!strcmp(function, "@asm") && asm_va) {
+        uint32_t args[7] = { src, (uint32_t)slen, count ? defines : 0, 0, flags, out3, out3 + 4 };
+        hr = void_call_guest(asm_va, 7, args, 1);
+    } else if (!strcmp(function, "@disasm") && disasm_va) {
+        uint32_t args[4] = { src, flags != 0, count ? values[0] : 0, out3 };
+        hr = void_call_guest(disasm_va, 4, args, 1);
+    } else if (function[0] != '@') {
+        uint32_t args[10] = { src, (uint32_t)slen, count ? defines : 0, 0, fva, pva, flags, out3, out3 + 4, out3 + 8 };
+        hr = void_call_guest(D3DXC_COMPILE, 10, args, 1);
+    } else {
+        hr = 0x80004005u;   /* no export to answer with: an error, as a missing DLL would give */
+    }
+    uint32_t nbytes = 0, nerr = 0;
+    uint8_t *code = (int32_t)hr >= 0 ? dxbuf_take(MEM32(out3), &nbytes) : NULL;
+    uint8_t *message = dxbuf_take(MEM32(out3 + 4), &nerr);
+    uint32_t ctab = MEM32(out3 + 8);
+    if (ctab && function[0] != '@') { uint32_t vt = MEM32(ctab); void_call_guest(MEM32(vt + 8), 1, &ctab, 1); }
+    if (code && nbytes) serve_write(cache, name, ".bin", hr, code, nbytes, 0);
+    else serve_write(cache, name, ".err", (int32_t)hr < 0 ? hr : 0x80004005u, message, nerr, 1);
+    void_log("[d3dx] served %.16s %s/%s: %s (%llu ms)", name, function, profile, code && nbytes ? "bytecode" : "error",
+        (unsigned long long)((void_monotonic_ns() - t0) / 1000000ull));
+    unlink(path);   /* after the answer: the game must not record it again meanwhile */
+    free(code);
+    free(message);
+    for (uint32_t i = 0; i < count; ++i) { void_gfree(names[i]); void_gfree(values[i]); }
+    void_gfree(defines); void_gfree(out3); void_gfree(fva); void_gfree(pva); void_gfree(src);
+    free(req);
+    return 1;
+}
+
+/* Answer the requests left in a folder (an earlier run, the disassemblies the
+ * game records); stops when the game posts one. */
+static void serve_sweep(const char *cache, const char *requests, uint32_t asm_va, uint32_t disasm_va, uint32_t seen)
+{
+    DIR *dir = opendir(requests);
+    struct dirent *de;
+    uint64_t h;
+    while (dir && (de = readdir(dir))) {
+        if (!serve_key(de->d_name, &h)) continue;
+        serve_request(cache, requests, de->d_name, asm_va, disasm_va);
+        serve_answered(h);
+        if (atomic_load_explicit(&ring->posted, memory_order_acquire) != seen) break;   /* the game's first */
+    }
+    if (dir) closedir(dir);
+}
+
+/* Four times a second: the beat, and the end with the game's process. */
+static void *serve_beat(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        atomic_store_explicit(&ring->beat, ring_clock(), memory_order_release);
+        uint32_t client = atomic_load_explicit(&ring->client, memory_order_relaxed);
+        if (client && kill((pid_t)client, 0) && errno == ESRCH) {
+            void_log("[d3dx] compile service: the game has ended");
+            void_log_flush();
+            _exit(0);
+        }
+        usleep(250000);
+    }
+    return NULL;
+}
+
+int void_d3dx_serve(const char *page)
+{
+    ring = ring_map(page, 0);
+    if (!ring || atomic_load_explicit(&ring->magic, memory_order_acquire) != RING_MAGIC || ring->version != RING_VERSION) {
+        void_log("[d3dx] compile service: no page at %s", page);
+        return 2;
+    }
+    ring_requests_dir(page);
+    if (!d3dx_device_ready()) {
+        void_log("[d3dx] compile service: no compiler");
+        return 1;
+    }
+    uint32_t asm_va = serve_export("D3DXAssembleShader"), disasm_va = serve_export("D3DXDisassembleShader");
+    char cache[1100], requests[1200], name[32];
+    snprintf(cache, sizeof cache, "%s/shadercache", void_data_dir());
+    snprintf(requests, sizeof requests, "%s/requests", cache);
+    mkdir(cache, 0775);
+    mkdir(requests, 0775);
+    /* The answers go where the game looks first: the app's private storage. */
+    void_d3dx_set_learned_cache_dir(page);
+    if (learned_cache_dir[0]) snprintf(cache, sizeof cache, "%s", learned_cache_dir);
+    atomic_store_explicit(&ring->server, (uint32_t)getpid(), memory_order_relaxed);
+    pthread_t beat;
+    if (pthread_create(&beat, NULL, serve_beat, NULL)) {
+        void_log("[d3dx] compile service: no heartbeat thread");
+        return 3;
+    }
+    pthread_detach(beat);
+    void_log("[d3dx] compile service ready (assemble %08X, disassemble %08X)", asm_va, disasm_va);
+    uint32_t seen = 0;
+    uint64_t swept = 0;
+    for (;;) {
+        uint32_t posted = atomic_load_explicit(&ring->posted, memory_order_acquire);
+        if (posted - seen > RING_SLOTS) seen = posted - RING_SLOTS;   /* overrun: the sweep finds the rest */
+        if (seen != posted) {
+            uint64_t h = ring->requests[seen % RING_SLOTS];
+            ++seen;
+            snprintf(name, sizeof name, "%016llx.req", (unsigned long long)h);
+            if (!serve_request(cache, ring_requests, name, asm_va, disasm_va))
+                serve_request(cache, requests, name, asm_va, disasm_va);
+            serve_answered(h);
+            continue;
+        }
+        uint64_t now = ring_clock();
+        if (now - swept >= 5000000000ull) {
+            swept = now;
+            serve_sweep(cache, ring_requests, asm_va, disasm_va, seen);
+            serve_sweep(cache, requests, asm_va, disasm_va, seen);
+            continue;
+        }
+        struct timespec wait = { 1, 0 };
+        syscall(SYS_futex, (uint32_t *)&ring->posted, FUTEX_WAIT, posted, &wait, NULL, 0);
+    }
+    return 0;
+}
+
+/* The script's `shaderwarm` runs the game's own pregenerator over its effect
+ * library, every variant of every strategy (script.c). For the collection
+ * (tools: compiled on the PC into the APK's cache) a variant of the shader
+ * models the port draws with (3.0) is recorded and not compiled here; the
+ * other models' variants are refused at once (the game never asks for them
+ * with an SM3 strategy). The disassembly and assembly the game does with a
+ * compiled variant go the usual way: recorded, answered by the fallback. */
+int void_shader_pregenerating;
+
+/* Publish once, atomically: a reader must never pull a partial request.
+ * 1 when the request is there (written now or before). */
+static int write_request(const char *dir, int quiet, uint64_t h, const char *function, const char *profile,
+    uint32_t flags, uint32_t include, const char *macros, size_t mlen, uint32_t src, uint32_t len)
+{
+    char path[1200];
+    snprintf(path, sizeof path, "%s/%016llx.req", dir, (unsigned long long)h);
+    if (!access(path, F_OK)) return 1;
+    char part[1200];
+    snprintf(part, sizeof part, "%s/%016llx.part", dir, (unsigned long long)h);
+    FILE *f = fopen(part, "wb");
+    if (!f) return 0;
+    int ok = fprintf(f, "function=%s\nprofile=%s\nflags=%u\ninclude=%s\nmacros=%zu\n%ssource=%u\n", function, profile, flags,
+        include ? "yes" : "no", mlen, macros, len) >= 0;
+    if (fwrite(GPTR(src), 1, len, f) != len) ok = 0;
+    if (fclose(f)) ok = 0;
+    if (ok && rename(part, path) == 0) {
+        if (!quiet)
+            void_log("[d3dx] %s/%s flags %X: cache miss %016llx recorded (%u bytes)", function, profile, flags,
+                (unsigned long long)h, len);
+        return 1;
+    }
+    unlink(part);
+    return 0;
+}
+
+/* The profile's requests: the PC tools and the service's sweep read them. */
+static int record_request(uint64_t h, const char *function, const char *profile, uint32_t flags, uint32_t include,
+    const char *macros, size_t mlen, uint32_t src, uint32_t len)
+{
+    char dir[1100];
+    snprintf(dir, sizeof dir, "%s/shadercache/requests", void_data_dir());
+    return write_request(dir, 0, h, function, profile, flags, include, macros, mlen, src, len);
+}
+
 static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t include, const char *function,
     const char *profile, uint32_t flags, uint32_t *out, uint32_t *hr)
 {
+    int pregen = 0;
+    handed = 0;
+    if (void_shader_pregenerating && function[0] != '@') {
+        if (strcmp(profile, "vs_3_0") && strcmp(profile, "ps_3_0")) return 0;
+        pregen = 1;
+    }
+    /* The rest of a pass build that waits for the service fails at once. */
+    if (function[0] != '@' && void_d3dx_async_aborted()) { handed = 1; return 0; }
     uint64_t h = 0xCBF29CE484222325ull;
     h = fnv(h, GPTR(src), len);
     h = fnv(h, "\0", 1);
@@ -900,6 +1477,16 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
     int binary = strcmp(profile, "disasm") != 0;
     uint64_t now = void_monotonic_ns();
     int wait_s = shader_wait_seconds(now);
+    /* A variant the service works on: no file system calls until it answers. */
+    int state = SERVICE_NONE;
+    if (ring && function[0] != '@') {
+        int i = pending_find(h);
+        if (i >= 0) {
+            state = pending_state(i, now);
+            if (state == SERVICE_WAITING && async_here()) { async_handed(h); return 0; }
+            pending_drop(i);   /* answered, late, or asked elsewhere: looked up and, missing, compiled here */
+        }
+    }
     if (wait_s <= 0 && miss_recent(h, now)) {
         if (function[0] != '@') shader_family_result(h, family, 1);
         return 0;
@@ -912,9 +1499,24 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
         VLOG("[d3dx] %s/%s from cache %016llx (%s)", function, profile, (unsigned long long)h, answer > 0 ? "bytecode" : "error");
         return answer;
     }
+    /* Within RendererD3D's pass builder, with the compile service running,
+     * the variant goes to the service and the builder fails this frame (the
+     * object comes a moment late) instead of holding the frame for the
+     * compile, up to most of a second on a Snapdragon 732G. The service has
+     * no include handler (RendererD3D passes one, its generated text never
+     * includes anything): a text with an #include is compiled here. */
+    if (!pregen && state != SERVICE_LATE && function[0] != '@' && wait_s <= 0 && async_here() &&
+        (!include || !memmem(GPTR(src), len, "#include", 8)) &&
+        service_alive() && write_request(ring_requests, 1, h, function, profile, flags, include, macros, mlen, src, len) &&
+        service_post(h, now)) {
+        async_handed(h);
+        return 0;
+    }
+    if (state == SERVICE_LATE)
+        void_log("[d3dx] %016llx unanswered by the compile service: compiled here", (unsigned long long)h);
     /* The device compiles HLSL itself (the lifted Microsoft compiler), writes
      * the result into the cache and answers from it: no PC, no waiting. */
-    if (function[0] != '@' && d3dx_device_fill(h, src, len, defines, include, function, profile, flags)) {
+    if (!pregen && function[0] != '@' && d3dx_device_fill(h, src, len, defines, include, function, profile, flags)) {
         answer = cache_answer(h, out, hr, binary);
         if (answer) {
             miss_note(h, now, 0);
@@ -923,23 +1525,15 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
             return answer;
         }
     }
-    /* Publish once, atomically: a reader must never pull a partial request. */
-    snprintf(dir, sizeof dir, "%s/shadercache/requests", void_data_dir());
-    snprintf(path, sizeof path, "%s/%016llx.req", dir, (unsigned long long)h);
-    if (access(path, F_OK)) {
-        char part[1200];
-        snprintf(part, sizeof part, "%s/%016llx.part", dir, (unsigned long long)h);
-        FILE *f = fopen(part, "wb");
-        if (f) {
-            int ok = fprintf(f, "function=%s\nprofile=%s\nflags=%u\ninclude=%s\nmacros=%zu\n%ssource=%u\n", function, profile, flags,
-                include ? "yes" : "no", mlen, macros, len) >= 0;
-            if (fwrite(GPTR(src), 1, len, f) != len) ok = 0;
-            if (fclose(f)) ok = 0;
-            if (ok && rename(part, path) == 0)
-                void_log("[d3dx] %s/%s flags %X: cache miss %016llx recorded (%u bytes)", function, profile, flags,
-                    (unsigned long long)h, len);
-            else unlink(part);
-        }
+    /* With the compile service running a request goes to it through the
+     * app's private storage, not through shared storage (some 25 ms of the
+     * frame each on a POCO X3: the renderer disassembles and assembles every
+     * new variant): answered for the next start. The pregenerator's
+     * requests stay in the profile for the PC. */
+    if (!pregen && ring && service_alive()) {
+        if (write_request(ring_requests, 1, h, function, profile, flags, include, macros, mlen, src, len)) service_wake(h);
+    } else {
+        record_request(h, function, profile, flags, include, macros, mlen, src, len);
     }
     /* Development: wait for the PC-side service (tools/shader_service.py --watch). */
     int wait_ms = wait_s * 1000;
@@ -998,7 +1592,8 @@ WINAPI_EXPORT(D3DX, D3DXCompileShader, 10)
         if (ARG(9)) MEM32(ARG(9)) = 0;
         return hr;
     }
-    const char *message = "error X0000: HLSL compilation is served from the offline cache only\n";
+    const char *message = handed ? "error X0000: the port's shader service is compiling this variant\n"
+                                 : "error X0000: HLSL compilation is served from the offline cache only\n";
     if (ARG(8)) MEM32(ARG(8)) = make_buffer(message, (uint32_t)strlen(message) + 1);
     if (ARG(7)) MEM32(ARG(7)) = 0;
     if (ARG(9)) MEM32(ARG(9)) = 0;
@@ -1231,12 +1826,180 @@ static uint32_t level_bytes(const d3d_format *f, uint32_t w, uint32_t h)
 #define D3DX_DEFAULT_NONPOW2_ 0xFFFFFFFEu
 #define D3DX_FROM_FILE_ 0xFFFFFFFDu
 
+/* ---- the launcher's converted textures (android/texconv/tvtx.h) ----
+ * <game>/data/port-textures.tvt: ETC2 or ASTC copies of the game's DXT
+ * textures, for a GPU without S3TC. A DDS the game hands D3DX is looked up by
+ * its content; found, its levels go to the GPU as those blocks, the game still
+ * seeing a DXT texture (its guest copies stay DXT). A GPU with S3TC takes the
+ * DXT blocks themselves (d3d9_resource.c) and needs no copy. */
+static struct {
+    int tried, fd;
+    uint32_t family, count;
+    tvtx_entry *index;
+    tvtx_crc_tables crc;
+} converted = {0, -1, 0, 0, NULL, {{{{0}}}, 0}};
+
+static void converted_open(void)
+{
+    char path[1200];
+    snprintf(path, sizeof path, "%s/data/" TVTX_FILE, void_root_dir());
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    if (d3d_gl_caps.s3tc) {
+        void_log("[d3dx] %s not needed: this GPU samples the DXT textures as they are", path);
+        close(fd);
+        return;
+    }
+    tvtx_header h;
+    struct stat st;
+    const char *why = NULL;
+    if (fstat(fd, &st) || pread(fd, &h, sizeof h, 0) != (ssize_t)sizeof h) why = "unreadable";
+    else if (h.magic != TVTX_MAGIC || h.version != TVTX_VERSION) why = "not a converted-texture pack of this version";
+    else if (h.family != TVTX_ETC2 && h.family != TVTX_ASTC) why = "an unknown format";
+    else if (h.family == TVTX_ASTC && !d3d_gl_caps.astc) why = "ASTC, which this GPU does not sample";
+    else if (h.index_offset < sizeof h || h.index_offset + (uint64_t)h.count * sizeof(tvtx_entry) != (uint64_t)st.st_size)
+        why = "truncated";
+    tvtx_entry *index = NULL;
+    if (!why && h.count) {
+        index = (tvtx_entry *)malloc((size_t)h.count * sizeof *index);
+        size_t bytes = (size_t)h.count * sizeof *index;
+        if (!index || pread(fd, index, bytes, (off_t)h.index_offset) != (ssize_t)bytes) why = "its index is unreadable";
+        for (uint32_t i = 0; !why && i < h.count; ++i) {
+            const tvtx_entry *e = &index[i];
+            if (e->offset < sizeof h || e->offset + e->bytes > h.index_offset ||
+                (i && (index[i - 1].key > e->key || (index[i - 1].key == e->key && index[i - 1].dds_bytes >= e->dds_bytes))) ||
+                (e->gl_format != TVTX_GL_ETC2_RGB8 && e->gl_format != TVTX_GL_ETC2_RGBA8 && e->gl_format != TVTX_GL_ASTC_4x4))
+                why = "its index is damaged";
+        }
+    }
+    if (why) {
+        void_log("[d3dx] %s: %s; the textures are decoded", path, why);
+        free(index);
+        close(fd);
+        return;
+    }
+    converted.fd = fd;
+    converted.family = h.family;
+    converted.count = h.count;
+    converted.index = index;
+    void_log("[d3dx] converted textures: %s, %u (%.0f MB)", h.family == TVTX_ASTC ? "ASTC 4x4" : "ETC2", h.count,
+        (double)st.st_size / 1e6);
+}
+
+/* The converted copy of a DXT DDS, or NULL. */
+static const tvtx_entry *converted_find(const uint8_t *data, uint32_t size)
+{
+    if (!converted.tried) {
+        converted.tried = 1;
+        converted_open();
+    }
+    if (!converted.index) return NULL;
+    tvtx_dds d;
+    uint64_t bytes = tvtx_dds_bytes(data, size, &d);
+    if (!bytes) return NULL;
+    return tvtx_find(converted.index, converted.count, tvtx_key(&converted.crc, data, (size_t)bytes), (uint32_t)bytes);
+}
+
+/* Upload a converted texture's levels from `skip` on. 0 if the pack failed. */
+static int converted_upload(d3d_texture *t, const tvtx_entry *e, const dds_info *info, uint32_t skip, int faces)
+{
+    uint8_t *payload = (uint8_t *)malloc(e->bytes ? e->bytes : 1);
+    if (!payload || pread(converted.fd, payload, e->bytes, (off_t)e->offset) != (ssize_t)e->bytes) {
+        free(payload);
+        void_log("[d3dx] the converted copy is unreadable: decoded");
+        return 0;
+    }
+    uint64_t at = 0;
+    for (int face = 0; face < faces; ++face)
+        for (uint32_t l = 0; l < info->mips; ++l) {
+            uint32_t lw = info->width >> l ? info->width >> l : 1, lh = info->height >> l ? info->height >> l : 1;
+            uint64_t bytes = tvtx_level_bytes(e->gl_format, lw, lh);
+            if (at + bytes > e->bytes) { free(payload); return 0; }
+            if (l >= skip && l - skip < t->levels) d3d_texture_upload_blocks(t, (uint32_t)face, l - skip, payload + at, (size_t)bytes);
+            at += bytes;
+        }
+    free(payload);
+    return 1;
+}
+
 static void fill_image_info(uint32_t out, const dds_info *info)
 {
     if (!out) return;
     MEM32(out) = info->width; MEM32(out + 4) = info->height; MEM32(out + 8) = info->depth;
     MEM32(out + 12) = info->mips; MEM32(out + 16) = info->format;
     MEM32(out + 20) = info->rtype; MEM32(out + 24) = 4;           /* D3DXIFF_DDS */
+}
+
+/* The game's TextureQuality takes min(quality, levels - 1) levels off every
+ * texture it loads (RendererD3D sub_10151F70), the interface's pictures too,
+ * and the interface draws a picture at the size it loaded: a location's on
+ * the map (256x256 with two or three levels) came out in a quarter of its
+ * place. The scene's textures are no help to tell them apart (most have two
+ * or three levels as well), the folder is: the pictures under Textures\ui
+ * with more than one level, known by their size and first bytes, keep their
+ * size (44 in the 2009 game, 35 in Tension, the 22 location pictures in each). */
+#define UI_PICTURES 256
+#define UI_PREFIX 256u
+typedef struct { uint32_t offset, size; } ui_entry;
+typedef struct { ui_entry *at; size_t count, room; } ui_entries;
+static struct { uint32_t size; uint64_t prefix; } ui_pictures[UI_PICTURES];
+static int ui_picture_count;
+static pthread_once_t ui_pictures_once = PTHREAD_ONCE_INIT;
+
+static uint64_t ui_hash(const uint8_t *p, size_t n)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < n; ++i) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
+
+/* The scan reads the directory from the same file: the files are read after it. */
+static void ui_picture_found(const char *path, uint32_t offset, uint32_t size, void *ctx)
+{
+    ui_entries *list = (ui_entries *)ctx;
+    if (size <= UI_PREFIX || strncasecmp(path, "textures\\ui\\", 12)) return;
+    if (list->count == list->room) {
+        size_t room = list->room ? list->room * 2 : 512;
+        ui_entry *grown = (ui_entry *)realloc(list->at, room * sizeof *grown);
+        if (!grown) return;
+        list->at = grown;
+        list->room = room;
+    }
+    list->at[list->count++] = (ui_entry){ offset, size };
+}
+
+static void ui_pictures_load(void)
+{
+    ui_entries list = {0};
+    FILE *f = void_vfs_open("Textures.vfs");
+    if (!f || !void_vfs_scan(f, "textures", ui_picture_found, &list)) {
+        void_log("[d3dx] Textures.vfs: no interface pictures read");
+        list.count = 0;
+    }
+    for (size_t i = 0; i < list.count && ui_picture_count < UI_PICTURES; ++i) {
+        uint8_t head[UI_PREFIX];
+        if (fseek(f, (long)list.at[i].offset, SEEK_SET) || fread(head, 1, sizeof head, f) != sizeof head) continue;
+        uint32_t levels = memcmp(head, "DDS ", 4) ? 0 : (uint32_t)head[28] | (uint32_t)head[29] << 8;
+        if (levels < 2) continue;   /* nothing to take off */
+        ui_pictures[ui_picture_count].size = list.at[i].size;
+        ui_pictures[ui_picture_count].prefix = ui_hash(head, sizeof head);
+        ++ui_picture_count;
+    }
+    if (f) fclose(f);
+    free(list.at);
+    void_log("[d3dx] %d interface pictures keep their size at a lower texture quality", ui_picture_count);
+}
+
+static int interface_picture(const uint8_t *data, uint32_t size)
+{
+    pthread_once(&ui_pictures_once, ui_pictures_load);
+    uint64_t prefix = 0;
+    for (int i = 0; i < ui_picture_count; ++i) {
+        if (ui_pictures[i].size != size) continue;
+        if (!prefix) prefix = ui_hash(data, UI_PREFIX);
+        if (prefix == ui_pictures[i].prefix) return 1;
+    }
+    return 0;
 }
 
 /* Shared body of the texture loaders. `cube` selects cube textures. */
@@ -1266,6 +2029,7 @@ static uint32_t load_texture(uint32_t device, const uint8_t *data, uint32_t size
     uint32_t want_w = (width == D3DX_DEFAULT_ || width == D3DX_DEFAULT_NONPOW2_ || width == D3DX_FROM_FILE_ || !width) ? w : width;
     uint32_t want_h = (height == D3DX_DEFAULT_ || height == D3DX_DEFAULT_NONPOW2_ || height == D3DX_FROM_FILE_ || !height) ? h : height;
     if (cube) want_h = want_w;
+    if (!cube && want_w < w && want_h < h && interface_picture(data, size)) { want_w = w; want_h = h; }
     if (want_w != w || want_h != h) {
         /* A power-of-two reduction (TextureQuality below full) starts from the
          * file's own smaller mip level, as a box-filtered resize would. */
@@ -1287,8 +2051,25 @@ static uint32_t load_texture(uint32_t device, const uint8_t *data, uint32_t size
         VLOG("[d3dx] texture format %u requested for a %u file: kept file format", fmt, info.format);
         fmt = info.format;
     }
-    d3d_texture *t = d3d_texture_new(g_d3d_device, cube ? D3DRTYPE_CUBETEXTURE : D3DRTYPE_TEXTURE, w, h, 1, levels, usage, fmt, pool);
+    /* A converted copy carries the file's levels: not for a texture asking for more (GL makes no block mipmaps). */
+    const tvtx_entry *copy = NULL;
+    if ((ff->conv == CONV_DXT1 || ff->conv == CONV_DXT3 || ff->conv == CONV_DXT5) && !(usage & D3DUSAGE_AUTOGENMIPMAP) &&
+        pool != D3DPOOL_SYSTEMMEM && pool != D3DPOOL_SCRATCH) {
+        uint32_t full = 1;
+        for (uint32_t m = w > h ? w : h; m > 1; m >>= 1) ++full;
+        uint32_t made = (!levels || levels > full) ? full : levels;
+        if (made <= file_levels) copy = converted_find(data, size);
+    }
+    d3d_texture *t = d3d_texture_new_as(g_d3d_device, cube ? D3DRTYPE_CUBETEXTURE : D3DRTYPE_TEXTURE, w, h, 1, levels, usage, fmt,
+        pool, copy ? (GLenum)copy->gl_format : 0);
     if (!t) return D3DERR_INVALIDCALL;
+    int from_copy = 0;
+    if (copy && t->compressed && t->gl_internal == copy->gl_format) {
+        from_copy = converted_upload(t, copy, &info, skip, cube ? 6 : 1);
+        /* Either way converted: the first DXT upload (the game's, or below if the copy
+         * failed) takes the texture back to the DXT path (d3d9_resource.c). */
+        t->converted = 1;
+    }
     t->hud_tag = void_hud_tag_for(data, size, &t->hud_slot);   /* the touch layer follows the cursor and helpers */
     uint32_t offset = info.data_offset;
     int faces = cube ? 6 : 1;
@@ -1301,7 +2082,7 @@ static uint32_t load_texture(uint32_t device, const uint8_t *data, uint32_t size
             if (offset + bytes > size) { void_log("[d3dx] truncated DDS"); goto done; }
             if (l >= skip && l - skip < t->levels) {
                 uint32_t tl = l - skip;
-                d3d_texture_upload_level(t, (uint32_t)face, tl, data + offset, d3d_format_pitch(ff, lw));
+                if (!from_copy) d3d_texture_upload_level(t, (uint32_t)face, tl, data + offset, d3d_format_pitch(ff, lw));
                 if (t->sysmem) {
                     uint32_t index = (uint32_t)face * t->levels + tl;
                     t->sysmem[index] = void_galloc(bytes);

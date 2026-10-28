@@ -233,6 +233,35 @@ int void_game_main(const char *game, const char *data, const char *images, int s
     return code;
 }
 
+/* The shader compile service's process (ShaderCompilerService.java): the
+ * runtime as the game has it, but of the images only the lifted D3DX
+ * compiler, serving the requests the game posts in the shared page (d3dx9.c
+ * void_d3dx_serve); no game code runs here. Its log is
+ * <data>/shadercache/service.log. */
+int void_d3dx_serve(const char *page);
+int void_shader_service_main(const char *game, const char *data, const char *images, const char *page)
+{
+    void_install_fault_handlers();
+    char log_path[1024];
+    snprintf(log_path, sizeof log_path, "%s/shadercache", data);
+    mkdir(log_path, 0775);
+    snprintf(log_path, sizeof log_path, "%s/shadercache/service.log", data);
+    void_log_open(log_path);
+    void_log("[void] shader compile service: game=%s data=%s images=%s", game, data, images);
+    if (!void_guest_reserve()) return 65;
+    void_threads_prefer_small_cores();
+    void_threads_init();
+    void_dispatch_init();
+    if (!void_files_init(game, data)) return 66;
+    void_files_std_init();
+    if (!void_modules_init_only(images, "d3dxcompiler_void.dll")) return 67;
+    void_machine_enter();
+    int code = void_d3dx_serve(page);
+    void_machine_leave();
+    void_log_flush();
+    return code;
+}
+
 #ifndef VOID_ANDROID_APP
 int main(int argc, char **argv)
 {

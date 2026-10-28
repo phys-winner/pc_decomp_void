@@ -12,6 +12,19 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef VOID_RELEASE
+#include "release_overrides.h"   /* another release's CScene (tools/lift_release.py) */
+#else
+/* Engine's physics::CScene in the 2009 Engine.dll (PhysX 2.8.1): its step,
+ * CScene::fetch, the "simulating" flag and NxScene's setTiming/getTiming slots. */
+#define ENGINE_STEP_RVA 0x12a25cu
+#define ENGINE_SCENE_FETCH sub_110DE7C0
+#define ENGINE_SCENE_FETCH_LIFTED sub_110DE7C0_lifted
+#define CSCENE_SIMULATING 0x40u
+#define NXSCENE_SET_TIMING 0x148u
+#define NXSCENE_GET_TIMING 0x14Cu
+#endif
+
 #define LOADER "physxloader.dll"
 
 static uint32_t core_module, cooking_module;
@@ -33,7 +46,7 @@ static uint32_t core(void)
 
 /* The physics' fixed step at the display's rate. Engine's scenes simulate
  * in fixed steps of 1/60 s (physics::CScene: setTiming(1/60, 8, FIXED),
- * the float at Engine+0x12a25c), what a 60 Hz screen shows; at 120 frames
+ * the float at Engine+ENGINE_STEP_RVA), what a 60 Hz screen shows; at 120 frames
  * a second every other frame had no step and the world moved in jerks
  * (measured on the Pixel 10a: the camera still in one frame of six while
  * walking, none with a step of 1/120). A step of one refresh of the screen
@@ -45,11 +58,31 @@ void void_physics_set_display_rate(float hz)
     if (hz >= 30.0f && hz <= 240.0f) display_hz = hz;
 }
 
+/* The step at the display's rate costs twice the original's simulation where
+ * the picture is drawn at 60 frames or fewer (measured on the POCO X3 in Zew
+ * at 30 frames: 3.5 steps a frame, a quarter of the main thread waiting in
+ * fetchResults), and buys nothing there: 1/60 already gives every frame a step.
+ * So the step follows the rate frames are actually shown at: the display's
+ * refresh from about 72 frames a second, the original 1/60 below about 58. */
+static uint32_t engine_step_va;
+static float fine_step, coarse_step = 1.0f / 60.0f;
+static int fine_steps = 1;
+static uint32_t step_generation = 1;
+
+static void engine_step_write(float step)
+{
+    uint32_t old = 0;
+    if (!engine_step_va || !void_vm_protect(engine_step_va & ~0xFFFu, 0x1000, 0x04, &old)) return;
+    memcpy(GPTR(engine_step_va), &step, 4);
+    void_vm_protect(engine_step_va & ~0xFFFu, 0x1000, old, &old);
+}
+
 static void physics_step_for_display(void)
 {
+#ifdef ENGINE_STEP_RVA
     uint32_t engine = void_module_handle("Engine.dll");
     if (!engine) return;
-    uint32_t va = engine + 0x12a25cu, old = 0;
+    uint32_t va = engine + ENGINE_STEP_RVA;
     float was;
     memcpy(&was, GPTR(va), 4);
     if (fabsf(was - 1.0f / 60.0f) > 1e-6f) {
@@ -57,12 +90,80 @@ static void physics_step_for_display(void)
         return;
     }
     float hz = display_hz < 60.0f ? 60.0f : display_hz > 144.0f ? 144.0f : display_hz;
-    if (hz < 61.0f || !void_vm_protect(va & ~0xFFFu, 0x1000, 0x04, &old)) return;
-    float step = 1.0f / hz;
-    memcpy(GPTR(va), &step, 4);
-    void_vm_protect(va & ~0xFFFu, 0x1000, old, &old);
-    void_log("[physx] the scenes' fixed step 1/%.0f s for a %.0f Hz display", hz, display_hz);
+    if (hz < 61.0f) return;
+    engine_step_va = va;
+    fine_step = 1.0f / hz;
+    engine_step_write(fine_step);
+    void_log("[physx] the scenes' fixed step 1/%.0f s for a %.0f Hz display, 1/60 while frames are slower", hz,
+        display_hz);
+#endif
 }
+
+#ifdef ENGINE_SCENE_FETCH
+/* Whether the shown rate has crossed to the other step for a second. */
+static float physics_wanted_step(void)
+{
+    static uint64_t crossing_since;
+    double fps = void_present_rate();
+    uint64_t now = void_monotonic_ns();
+    int crossing = fps > 0 && (fine_steps ? fps < 58.0 : fps > 72.0);
+    if (!crossing) crossing_since = 0;
+    else if (!crossing_since) crossing_since = now;
+    else if (now - crossing_since >= 1000000000ull) {
+        fine_steps = !fine_steps;
+        crossing_since = 0;
+        ++step_generation;
+        engine_step_write(fine_steps ? fine_step : coarse_step);   /* scenes made from now on */
+        void_log("[physx] the step is 1/%.0f s: frames at %.1f a second", 1.0 / (fine_steps ? fine_step : coarse_step),
+            fps);
+    }
+    return fine_steps ? fine_step : coarse_step;
+}
+
+/* Engine's CScene::fetch (thiscall on the CScene; its NxScene at +0x14, "simulating" at
+ * +CSCENE_SIMULATING): fetchResults(NX_RIGID_BODY_FINISHED, block), getTiming, its
+ * listeners. Once it returns the scene is idle until CScene::simulate, the one moment
+ * NxScene::setTiming may run. Vtable slots as the game itself uses them: setTiming(step, 8,
+ * FIXED) from CScene's constructor, getTiming(&step, &iterations, &method, &substeps) here. */
+#define NX_TIMESTEP_FIXED 0u
+
+void ENGINE_SCENE_FETCH_LIFTED(void);
+void ENGINE_SCENE_FETCH(void)
+{
+    uint32_t cscene = g_ecx;
+    int fetched = MEM8(cscene + CSCENE_SIMULATING) != 0;
+    ENGINE_SCENE_FETCH_LIFTED();
+    if (!fetched || !engine_step_va) return;
+    float want = physics_wanted_step();
+    uint32_t scene = MEM32(cscene + 0x14);
+    /* The scenes whose step is already this generation's: a few live at once. */
+    static struct { uint32_t scene, generation; } done[8];
+    static unsigned done_next;
+    for (unsigned i = 0; i < 8; ++i)
+        if (done[i].scene == scene && done[i].generation == step_generation) return;
+    if (!scene || !void_vm_readable(scene, 4) || !void_vm_readable(MEM32(scene) + NXSCENE_SET_TIMING, 8)) return;
+    static uint32_t timing;   /* guest scratch for getTiming's four results */
+    if (!timing) timing = void_galloc(16);
+    void_regs saved;
+    void_regs_save(&saved);
+    uint32_t vt = MEM32(scene);
+    MEM32(timing) = MEM32(timing + 4) = MEM32(timing + 8) = MEM32(timing + 12) = 0;
+    uint32_t outs[4] = { timing, timing + 4, timing + 8, timing + 12 };
+    void_call_guest_this(MEM32(vt + NXSCENE_GET_TIMING), scene, 4, outs);
+    float step;
+    memcpy(&step, GPTR(timing), 4);
+    uint32_t iterations = MEM32(timing + 4), method = MEM32(timing + 8);
+    /* Only the steps given here: a scene the game times otherwise keeps its own. */
+    if (method == NX_TIMESTEP_FIXED && step != want && (step == fine_step || step == coarse_step)) {
+        uint32_t args[3] = { 0, iterations, method };
+        memcpy(&args[0], &want, 4);
+        void_call_guest_this(MEM32(vt + NXSCENE_SET_TIMING), scene, 3, args);
+    }
+    void_regs_load(&saved);
+    done[done_next++ % 8].scene = scene;
+    done[(done_next - 1) % 8].generation = step_generation;
+}
+#endif
 
 /* NxCreatePhysicsSDK(sdkVersion, allocator, outputStream, desc, errorCode) */
 CDECL_EXPORT(LOADER, NxCreatePhysicsSDK)

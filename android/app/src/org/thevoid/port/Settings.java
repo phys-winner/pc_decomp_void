@@ -48,11 +48,14 @@ final class Settings {
     float subtitleSize, textSize;
     boolean textContrast;
     int hdr;               /* 0 off, 1 simplified, 2 full; all use SM3 strategies. */
-    int anisotropy;        /* 0 (off), 2, 4, 8, 16 */
+    int anisotropy;        /* 0 (off), 2, 4, 8, 16; 4 by default (16 cost the Adreno 618 a third of its frames) */
     int textureQuality;    /* 0 high, 1 low (the configurator's values) */
     int lightmapQuality;   /* 0 high, 1 medium, 2 low */
     int soundRate;         /* 22 or 44 kHz */
+    int fpsLimit;          /* frames a second at most: one of the display's refresh rates; 0 its fastest */
+    boolean reflections;   /* water mirrors drawn (off: their reflection is black) */
     boolean sensitivityDefaulted;   /* the game's MouseSensitivity was set to 1 once (in data\settings.xml) */
+    boolean anisotropyDefaulted;    /* the earlier default filtering, x16, went to x4 once */
 
     Settings(Context c) {
         prefs = c.getSharedPreferences("touch", Context.MODE_PRIVATE);
@@ -83,11 +86,14 @@ final class Settings {
         textSize = bounded(prefs.getFloat("textSize", 1f), 1f, 1f, 1.5f);
         textContrast = prefs.getBoolean("textContrast", true);
         hdr = Math.max(0, Math.min(2, prefs.getInt("hdr", 2)));
-        anisotropy = prefs.getInt("anisotropy", 16);
+        anisotropy = prefs.getInt("anisotropy", 4);
         textureQuality = prefs.getInt("textureQuality", 0);
         lightmapQuality = Math.max(0, Math.min(2, prefs.getInt("lightmapQuality", 0)));
         soundRate = prefs.getInt("soundRate", 44);
+        fpsLimit = Math.max(0, prefs.getInt("fpsLimit", 0));
+        reflections = prefs.getBoolean("reflections", true);
         sensitivityDefaulted = prefs.getBoolean("gameSensitivityDefaulted", false);
+        anisotropyDefaulted = prefs.getBoolean("anisotropyDefaulted4", false);
         touchHelpShown = prefs.getBoolean("touchHelpShown", false);
     }
 
@@ -105,8 +111,10 @@ final class Settings {
             .putBoolean("showBodyButton", showBodyButton).putFloat("renderScale", renderScale).putFloat("uiScale", uiScale).putInt("hdr", hdr)
             .putFloat("subtitleSize", subtitleSize).putFloat("textSize", textSize).putBoolean("textContrast", textContrast)
             .putInt("anisotropy", anisotropy).putInt("textureQuality", textureQuality)
-            .putInt("lightmapQuality", lightmapQuality).putInt("soundRate", soundRate)
+            .putInt("lightmapQuality", lightmapQuality).putInt("soundRate", soundRate).putInt("fpsLimit", fpsLimit)
+            .putBoolean("reflections", reflections)
             .putBoolean("gameSensitivityDefaulted", sensitivityDefaulted)
+            .putBoolean("anisotropyDefaulted4", anisotropyDefaulted)
             .putBoolean("touchHelpShown", touchHelpShown).apply();
     }
 
@@ -145,6 +153,7 @@ final class Settings {
         m.put("PortTextureQuality", Integer.toString(textureQuality));
         m.put("PortLightmapQuality", Integer.toString(lightmapQuality));
         m.put("PortSoundRate", Integer.toString(soundRate));
+        m.put("PortReflections", b(reflections));
         return m;
     }
 
@@ -191,6 +200,7 @@ final class Settings {
         textureQuality = readI(xml, "PortTextureQuality", textureQuality, 0, 1);
         lightmapQuality = readI(xml, "PortLightmapQuality", lightmapQuality, 0, 2);
         soundRate = readI(xml, "PortSoundRate", soundRate, 22, 44) < 33 ? 22 : 44;
+        reflections = readB(xml, "PortReflections", reflections);
     }
 
     private static String b(boolean v) { return v ? "1" : "0"; }
@@ -242,6 +252,31 @@ final class Settings {
             + "/" + Math.round(subtitleSize * 100) + "/" + Math.round(textSize * 100) + "/" + textContrast;
     }
 
+    /** The refresh rates the display offers at its present resolution, whole
+     *  hertz, fastest first: the frame limits there are to choose from. */
+    static int[] refreshRates(android.view.Display display) {
+        java.util.TreeSet<Integer> rates = new java.util.TreeSet<>(java.util.Collections.reverseOrder());
+        android.view.Display.Mode now = display.getMode();
+        for (android.view.Display.Mode m : display.getSupportedModes())
+            if (m.getPhysicalWidth() == now.getPhysicalWidth() && m.getPhysicalHeight() == now.getPhysicalHeight())
+                rates.add(Math.round(m.getRefreshRate()));
+        rates.add(Math.round(now.getRefreshRate()));
+        int[] out = new int[rates.size()];
+        int i = 0;
+        for (int r : rates) out[i++] = r;
+        return out;
+    }
+
+    /** The display's mode at the present resolution whose refresh is `hz`, or null. */
+    static android.view.Display.Mode modeFor(android.view.Display display, int hz) {
+        android.view.Display.Mode now = display.getMode();
+        for (android.view.Display.Mode m : display.getSupportedModes())
+            if (m.getPhysicalWidth() == now.getPhysicalWidth() && m.getPhysicalHeight() == now.getPhysicalHeight()
+                    && Math.round(m.getRefreshRate()) == hz)
+                return m;
+        return null;
+    }
+
     /** The game's render size: the screen's height times the render scale,
      *  at the screen's aspect (Hor+: the game keeps its vertical field of
      *  view and shows more at the sides). Even sizes. */
@@ -286,7 +321,8 @@ final class Settings {
         T_TAP_PUT = T_FOV + 17, T_TAP_RETURN = T_FOV + 18,
         /* The main and pause menus' glyphs, as the game's own hover names them
          * (Properties\Strings\menu.txt main_menu_*): HUD slots 20..26, then the exit. */
-        T_MENU_FIRST = T_FOV + 19, T_MENU_EXIT = T_MENU_FIRST + 7, T_SHOW_MENU_LABELS = T_MENU_EXIT + 1;
+        T_MENU_FIRST = T_FOV + 19, T_MENU_EXIT = T_MENU_FIRST + 7, T_SHOW_MENU_LABELS = T_MENU_EXIT + 1,
+        T_REFLECTIONS = T_SHOW_MENU_LABELS + 1;
     private static final String[][] TEXTS = {
         {"Load the quick save?", "Загрузить быстрое сохранение?", "Schnellspeicherstand laden?", "Wczytać szybki zapis?"},
         {"Additional settings", "Дополнительные настройки", "Weitere Einstellungen", "Dodatkowe ustawienia"},
@@ -447,6 +483,7 @@ final class Settings {
         {"Back to the game", "Назад", "Zurück zum Spiel", "Powrót do gry"},
         {"Exit", "Выйти", "Spiel verlassen", "Wyjdź"},
         {"Main menu item names", "Названия пунктов главного меню", "Namen der Hauptmenüpunkte", "Nazwy pozycji menu głównego"},
+        {"Water reflections", "Отражения в воде", "Spiegelungen im Wasser", "Odbicia w wodzie"},
     };
 
     /** The release's language (fsystems.xml: Russian, German, Polish,

@@ -21,6 +21,7 @@
 int void_game_main(const char *game, const char *data, const char *images, int selftest);
 void void_process_exit(uint32_t code, int run_detach);
 void void_d3dx_set_packaged_cache_dir(const char *dir);
+void void_d3dx_set_learned_cache_dir(const char *sibling);
 uint64_t void_d3dx_missing_shader(void);
 
 static ANativeWindow *window;
@@ -99,6 +100,7 @@ JNIEXPORT jboolean JNICALL Java_org_thevoid_port_GameActivity_nativeStart(JNIEnv
     snprintf(data_dir, sizeof data_dir, "%s", d);
     snprintf(images_dir, sizeof images_dir, "%s", i);
     void_d3dx_set_packaged_cache_dir(s);
+    void_d3dx_set_learned_cache_dir(s);
     (*env)->ReleaseStringUTFChars(env, game, g);
     (*env)->ReleaseStringUTFChars(env, data, d);
     (*env)->ReleaseStringUTFChars(env, images, i);
@@ -422,6 +424,86 @@ JNIEXPORT void JNICALL Java_org_thevoid_port_GameActivity_nativeSetDisplayRate(J
 {
     (void)env; (void)cls;
     void_physics_set_display_rate(hz);
+}
+
+/* The player's frame limit (0: none) and the display's present refresh,
+ * which the presentation keeps the limit by (d3d9_gl.c). */
+void d3d_gl_set_frame_limit(uint32_t hz);
+void d3d_gl_set_display_refresh(float hz);
+
+/* ShaderCompilerService's process: the lifted D3DX compiler serving the game's
+ * shader requests on another core (main.c, d3dx9.c). Never returns while it
+ * serves. Its thread has the game thread's stack: the compiler's recursion is
+ * deep, and lifted code recurses on the native stack (a Java thread's 1 MB
+ * overflowed). */
+int void_shader_service_main(const char *game, const char *data, const char *images, const char *page);
+
+static char service_args[4][1024];
+static void *service_main(void *arg)
+{
+    (void)arg;
+    return (void *)(intptr_t)void_shader_service_main(service_args[0], service_args[1], service_args[2], service_args[3]);
+}
+
+JNIEXPORT jint JNICALL Java_org_thevoid_port_ShaderCompilerService_nativeServe(JNIEnv *env, jclass cls, jstring game,
+    jstring data, jstring images, jstring page)
+{
+    (void)cls;
+    const char *g = (*env)->GetStringUTFChars(env, game, NULL);
+    const char *d = (*env)->GetStringUTFChars(env, data, NULL);
+    const char *i = (*env)->GetStringUTFChars(env, images, NULL);
+    const char *p = (*env)->GetStringUTFChars(env, page, NULL);
+    snprintf(service_args[0], sizeof service_args[0], "%s", g);
+    snprintf(service_args[1], sizeof service_args[1], "%s", d);
+    snprintf(service_args[2], sizeof service_args[2], "%s", i);
+    snprintf(service_args[3], sizeof service_args[3], "%s", p);
+    (*env)->ReleaseStringUTFChars(env, game, g);
+    (*env)->ReleaseStringUTFChars(env, data, d);
+    (*env)->ReleaseStringUTFChars(env, images, i);
+    (*env)->ReleaseStringUTFChars(env, page, p);
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64u << 20);
+    int started = pthread_create(&thread, &attr, service_main, NULL) == 0;
+    pthread_attr_destroy(&attr);
+    void *code = (void *)(intptr_t)70;
+    if (started) pthread_join(thread, &code);
+    return (jint)(intptr_t)code;
+}
+
+/* The page the game shares with its compile service (d3dx9.c), made before
+ * the game starts and the service is bound; false: no service this run. */
+int void_d3dx_set_service_ring(const char *path);
+
+JNIEXPORT jboolean JNICALL Java_org_thevoid_port_GameActivity_nativeCompileService(JNIEnv *env, jclass cls, jstring page)
+{
+    (void)cls;
+    const char *p = (*env)->GetStringUTFChars(env, page, NULL);
+    int ok = void_d3dx_set_service_ring(p);
+    (*env)->ReleaseStringUTFChars(env, page, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/* Water mirrors drawn (the player's PortReflections; renderer_native.c, the 2009 game). */
+void void_renderer_set_reflections(int on);
+
+JNIEXPORT void JNICALL Java_org_thevoid_port_GameActivity_nativeSetReflections(JNIEnv *env, jclass cls, jboolean on)
+{
+    (void)env; (void)cls;
+    void_renderer_set_reflections(on != JNI_FALSE);
+}
+
+JNIEXPORT void JNICALL Java_org_thevoid_port_GameActivity_nativeSetFrameLimit(JNIEnv *env, jclass cls, jint hz)
+{
+    (void)env; (void)cls;
+    d3d_gl_set_frame_limit(hz > 0 ? (uint32_t)hz : 0);
+}
+
+JNIEXPORT void JNICALL Java_org_thevoid_port_GameActivity_nativeSetDisplayRefresh(JNIEnv *env, jclass cls, jfloat hz)
+{
+    (void)env; (void)cls;
+    d3d_gl_set_display_refresh(hz);
 }
 
 /* The interface scale for the game's text (fonts.c), before the game starts. */

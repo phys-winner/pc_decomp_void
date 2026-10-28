@@ -4,6 +4,28 @@
 static int physics_native_enabled = 1;
 void void_physics_native_enable(int enabled) { physics_native_enabled = enabled != 0; }
 
+#ifdef VOID_RELEASE
+#include "release_overrides.h"   /* these bodies' twins in another release (tools/lift_release.py) */
+#else
+#define ENGINE_DEBUG_VECTOR sub_110014F0           /* the 2009 Engine.dll */
+#define ENGINE_DEBUG_VECTOR_LIFTED sub_110014F0_lifted
+#define PHYSX_DEBUG_LINE sub_181802C0              /* the 2009 PhysXCore.dll */
+#define PHYSX_DEBUG_LINE_LIFTED sub_181802C0_lifted
+#endif
+
+#ifdef ENGINE_DEBUG_VECTOR
+void ENGINE_DEBUG_VECTOR_LIFTED(void);
+int void_renderer_append12(int preserve_ecx);
+
+/* Engine's copy of the append preserves ECX and has its own growth/EH path. */
+void ENGINE_DEBUG_VECTOR(void)
+{
+    if (!physics_native_enabled || !void_renderer_append12(1)) ENGINE_DEBUG_VECTOR_LIFTED();
+}
+#endif
+
+/* The guards of PhysX 2.8.1's leaves the 2009 build runs with local x87 state
+ * (tools/build_android.py localize_fpu; TECHDEBT-2008.md). */
 #ifndef VOID_RELEASE
 /* Extreme values and aliases need the original NaN conversion/store behavior. */
 int void_physics_sweep_finite(void)
@@ -60,22 +82,17 @@ int void_physics_worker_pair_finite(void)
     return 1;
 }
 
-void sub_181802C0_lifted(void);
-void sub_110014F0_lifted(void);
-int void_renderer_append12(int preserve_ecx);
+#endif
 
-/* Engine's copy of the append preserves ECX and has its own growth/EH path. */
-void sub_110014F0(void)
-{
-    if (!physics_native_enabled || !void_renderer_append12(1)) sub_110014F0_lifted();
-}
+#ifdef PHYSX_DEBUG_LINE
+void PHYSX_DEBUG_LINE_LIFTED(void);
 
-void sub_181802C0(void)
+void PHYSX_DEBUG_LINE(void)
 {
     uint32_t object = g_ecx, stack = g_esp;
     if (!physics_native_enabled || object < 0x10000u || object > GUEST_USER_TOP - 32u ||
         stack < 0x10028u || stack > GUEST_USER_TOP - 16u) {
-        sub_181802C0_lifted();
+        PHYSX_DEBUG_LINE_LIFTED();
         return;
     }
     uint32_t begin = MEM32(object + 20), end = MEM32(object + 24), cap = MEM32(object + 28);
@@ -89,14 +106,14 @@ void sub_181802C0(void)
         (first < stack + 16u && stack - 40u < first + 12u) ||
         (second < stack + 16u && stack - 40u < second + 12u) ||
         (end < stack + 16u && stack - 40u < end + 28u)) {
-        sub_181802C0_lifted();
+        PHYSX_DEBUG_LINE_LIFTED();
         return;
     }
     uint32_t coordinates[6] = {MEM32(first), MEM32(first + 4), MEM32(first + 8),
                                MEM32(second), MEM32(second + 4), MEM32(second + 8)};
     for (unsigned i = 0; i < 6; ++i)
         if ((coordinates[i] & 0x7fffffffu) >= 0x7f800000u) {
-            sub_181802C0_lifted();
+            PHYSX_DEBUG_LINE_LIFTED();
             return;
         }
     /* Finite float loads/stores are exact; each x87 push/pop only clears slot 7. */

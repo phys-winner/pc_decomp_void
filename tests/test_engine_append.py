@@ -18,9 +18,13 @@ def main():
     original = function(engine, "sub_110026D0") + "\n" + function(engine, "sub_110014F0").replace(
         "void sub_110014F0(void)", "void original_append(void)")
     native = (ROOT / "android/host/renderer_native.c").read_text().replace('#include "host.h"', '')
-    native = re.sub(r'^void sub_16082260\(void\).*$', '', native, flags=re.M)
-    wrapper = re.search(r'^void sub_110014F0\(void\)\n\{.*?^\}',
+    # The append alone: the passes after it call into the host.
+    native = native[:native.index("/* RendererD3D's scene-render pass")]
+    native, count = re.subn(r'^void RENDERER_APPEND12\(void\).*$', '', native, flags=re.M)
+    assert count == 1
+    wrapper = re.search(r'^void ENGINE_DEBUG_VECTOR\(void\)\n\{.*?^\}',
                         (ROOT / "android/host/physics_native.c").read_text(), re.M | re.S).group()
+    wrapper = wrapper.replace("ENGINE_DEBUG_VECTOR_LIFTED", "sub_110014F0_lifted").replace("ENGINE_DEBUG_VECTOR", "sub_110014F0")
     native += '\nstatic int physics_native_enabled = 1;\n' + wrapper
     driver = (ROOT / "tests/renderer_append_probe.c").read_text()
     driver = driver.replace("sub_16082260", "sub_110014F0").replace("sub_16082390", "sub_11001830")

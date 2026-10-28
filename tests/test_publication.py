@@ -29,6 +29,13 @@ def main():
     forbidden = {".exe", ".dll", ".so", ".apk", ".dex", ".class", ".zip", ".vfs", ".keystore", ".jks", ".pem", ".key", ".log"}
     for name in files:
         path = ROOT / name
+        if path.is_dir():
+            dependencies = json.loads((ROOT / "dependencies.json").read_text())
+            dependency = next(d for d in dependencies.values() if d.get("directory") == name)
+            assert dependency.get("submodule"), name
+            entry = subprocess.check_output(["git", "ls-files", "--stage", "--", name], cwd=ROOT).decode().split()
+            assert entry[:3] == ["160000", dependency["revision"], "0"], entry
+            continue
         assert path.suffix.lower() not in forbidden, name
         assert not any(part in {"generated", "build", "original", "pub", "research", "__pycache__"} for part in path.relative_to(ROOT).parts), name
         text = path.read_text(encoding="utf-8")

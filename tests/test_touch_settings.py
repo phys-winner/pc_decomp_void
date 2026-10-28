@@ -77,7 +77,7 @@ for index, lang in INDEXES.items():
     assert settings["PortHDR"].values == [0, 1, 2]
     assert settings["PortLightmapQuality"].values == [2, 1, 0]
     for key, expected in {"PortRenderScale": 100, "PortHDR": 2, "PortLightmapQuality": 0,
-                          "PortAnisotropy": 16, "PortTextureQuality": True}.items():
+                          "PortAnisotropy": 4, "PortTextureQuality": True}.items():
         assert settings[key].default == expected, (key, settings[key].default)
     assert settings["PortDebugCommands"].default is False
     assert settings["PortTouchAdaptations"].default is True
@@ -99,7 +99,7 @@ source = (ROOT / "android/app/src/org/thevoid/port/Settings.java").read_text(enc
 for key in ("PortFOV", "PortVeinBrightness", "PortDebugCommands", "PortTouchAdaptations", "PortShowMenuButton", "PortShowMenuLabels", "PortShowActionButton"):
     assert source.count('"' + key + '"') == 2, key
 for getter, key, value in [("getFloat", "renderScale", "1.0f"),
-                           ("getInt", "anisotropy", "16"), ("getInt", "textureQuality", "0"),
+                           ("getInt", "anisotropy", "4"), ("getInt", "textureQuality", "0"),
                            ("getInt", "soundRate", "44")]:
     assert f'prefs.{getter}("{key}", {value})' in source, key
 assert settings["PortSoundRate"].default is True

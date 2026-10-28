@@ -4,6 +4,7 @@
 #include "hud.h"
 #include "shader_warm.h"
 #include <time.h>
+#include <stdatomic.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <math.h>
@@ -19,6 +20,7 @@ static EGLSurface egl_surface = EGL_NO_SURFACE;
 static int window_mode;
 static int dump_every;
 d3d_gl_limits_t d3d_gl_limits;
+d3d_gl_caps_t d3d_gl_caps;
 static uint32_t trace_frame;   /* defined with the tracing helpers */
 static GLuint vao;
 static GLuint upload_unit = 31;   /* texture uploads bind here, away from the sampler units */
@@ -50,6 +52,31 @@ static uint32_t egl_window_serial;
  * other guest threads run, until the activity has a surface again. */
 static uint32_t period_logged;   /* the still menu's frame period last logged (0: full rate) */
 
+/* The player's frame limit (Settings.fpsLimit) against the display's present
+ * refresh, both from the activity (android_main.c). A display at the limit
+ * (the mode the activity asked for) keeps it by itself; one at a whole
+ * multiple of it shows a frame every n-th refresh (swap interval n); any
+ * other is paced by the clock, the swap then meeting the next refresh. */
+static _Atomic uint32_t frame_limit_hz, display_refresh_mhz;
+static int swap_interval_set = 1;   /* the window surface's swap interval */
+void d3d_gl_set_frame_limit(uint32_t hz) { atomic_store(&frame_limit_hz, hz); }
+void d3d_gl_set_display_refresh(float hz) { atomic_store(&display_refresh_mhz, hz > 0 ? (uint32_t)(hz * 1000.0f) : 0u); }
+
+/* The swap interval the limit asks for; *period_us: the frame period the
+ * clock keeps instead (0: none). */
+static int frame_limit_plan(uint32_t *period_us)
+{
+    uint32_t limit = atomic_load(&frame_limit_hz);
+    double refresh = atomic_load(&display_refresh_mhz) / 1000.0;
+    *period_us = 0;
+    if (!limit || refresh <= limit * 1.03) return 1;
+    double ratio = refresh / limit;
+    int n = (int)(ratio + 0.5);
+    if (n >= 2 && fabs(ratio - n) <= 0.03 * n) return n;
+    *period_us = (uint32_t)(1000000.0 / limit);
+    return 1;
+}
+
 static void follow_window(void)
 {
     uint32_t serial;
@@ -74,6 +101,7 @@ static void follow_window(void)
         egl_surface = EGL_NO_SURFACE;
     } else {
         eglSwapInterval(egl_display, 1);
+        swap_interval_set = 1;   /* the frame limit sets its own again (d3d_gl_present) */
         void_log("[gl] presenting into a new window surface");
     }
     void_android_window_ack(serial);
@@ -118,6 +146,25 @@ int d3d_gl_init(void)
     glGetIntegerv(GL_MAX_DRAW_BUFFERS, &value); d3d_gl_limits.max_draw_buffers = (uint32_t)value;
     void_log("[gl] limits: texture %u, 3D texture %u, draw buffers %u", d3d_gl_limits.max_texture,
         d3d_gl_limits.max_3d_texture, d3d_gl_limits.max_draw_buffers);
+    /* The game's DXT blocks go to a GPU with S3TC as they are; elsewhere they
+     * are decoded, unless the launcher converted them (d3dx9.c, tvtx.h).
+     * VOID_NO_S3TC=1 decodes them all the same (comparisons). */
+    GLint extensions = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &extensions);
+    int dxt1 = 0, dxt3 = 0, dxt5 = 0;
+    for (GLint i = 0; i < extensions; ++i) {
+        const char *e = (const char *)glGetStringi(GL_EXTENSIONS, (GLuint)i);
+        if (!e) continue;
+        if (!strcmp(e, "GL_EXT_texture_compression_s3tc")) dxt1 = dxt3 = dxt5 = 1;
+        else if (!strcmp(e, "GL_EXT_texture_compression_dxt1")) dxt1 = 1;
+        else if (!strcmp(e, "GL_ANGLE_texture_compression_dxt3")) dxt3 = 1;
+        else if (!strcmp(e, "GL_ANGLE_texture_compression_dxt5")) dxt5 = 1;
+        else if (!strcmp(e, "GL_KHR_texture_compression_astc_ldr")) d3d_gl_caps.astc = 1;
+    }
+    const char *no_s3tc = getenv("VOID_NO_S3TC");
+    d3d_gl_caps.s3tc = dxt1 && dxt3 && dxt5 && !(no_s3tc && *no_s3tc == '1');
+    void_log("[gl] block textures: DXT %s, ASTC %s, ETC2 yes", d3d_gl_caps.s3tc ? "sampled as they are" : "decoded",
+        d3d_gl_caps.astc ? "yes" : "no");
     const char *dump = getenv("VOID_DUMP_FRAMES");
     dump_every = dump ? atoi(dump) : 0;
     const char *trace = getenv("VOID_TRACE_FRAME");
@@ -1413,6 +1460,14 @@ static volatile int dump_requested;
 /* Dump the next presented frame (scripted "shot"). */
 void d3d_request_frame_dump(void) { dump_requested = 1; }
 
+static double present_period_ns;
+
+/* Frames a second the game is shown at (0 before the second frame). */
+double void_present_rate(void) { return present_period_ns > 0 ? 1e9 / present_period_ns : 0; }
+
+static uint32_t frames_presented;
+uint32_t void_frames_presented(void) { return frames_presented; }
+
 void d3d_gl_present(d3d_device *dev)
 {
 #ifndef VOID_ANDROID_APP
@@ -1436,12 +1491,25 @@ void d3d_gl_present(d3d_device *dev)
     clock_gettime(CLOCK_MONOTONIC, &now);
     /* A frame shown long after the last one: a page or a scene loading,
      * a hitch in play. */
-    static uint64_t last_present_ns;
+    static uint64_t last_present_ns, slowest_ns;
+    static uint32_t hitches;   /* frames shown 50 ms or more after the last, in this statistics window */
     uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+    if (last_present_ns) {
+        uint64_t interval = now_ns - last_present_ns;
+        if (interval > slowest_ns) slowest_ns = interval;
+        if (interval >= 50000000u) ++hitches;
+    }
     if (last_present_ns && now_ns - last_present_ns >= 250000000u)
         void_log("[gl] long frame %u: %.0f ms, %u draws", dev->frame,
                  (double)(now_ns - last_present_ns) / 1e6, this_draws);
+    else if (last_present_ns) {
+        /* The rate frames are shown at, smoothed over some ten frames (the
+         * physics' step follows it, physx.c); a long frame is no rate. */
+        double period = (double)(now_ns - last_present_ns);
+        present_period_ns = present_period_ns > 0 ? present_period_ns + (period - present_period_ns) * 0.1 : period;
+    }
     last_present_ns = now_ns;
+    ++frames_presented;
     /* Every 600 frames, or every 5 s when frames are slow. */
     if (dev->frame - fps_frame >= 600 || !fps_start.tv_sec || now.tv_sec - fps_start.tv_sec >= 5) {
         struct timespec cpu;
@@ -1452,9 +1520,12 @@ void d3d_gl_present(d3d_device *dev)
         uint32_t frames = dev->frame - fps_frame;
         if (fps_start.tv_sec && frames)
             void_log("[gl] frame %u: %.1f fps; per frame %.1f ms wall, %.1f ms cpu, %.1f ms machine wait, %.0f draws, "
-                "%.1f ms swap", dev->frame, frames / dt, 1000.0 * dt / frames, 1000.0 * dcpu / frames,
-                (double)(wait - wait_start) / 1e6 / frames, (double)(draw_calls - draws_start) / frames,
-                (double)(swap_ns - swap_start_ns) / 1e6 / frames);
+                "%.1f ms swap; slowest %.0f ms, %u over 50 ms", dev->frame, frames / dt, 1000.0 * dt / frames,
+                1000.0 * dcpu / frames, (double)(wait - wait_start) / 1e6 / frames,
+                (double)(draw_calls - draws_start) / frames, (double)(swap_ns - swap_start_ns) / 1e6 / frames,
+                (double)slowest_ns / 1e6, hitches);
+        slowest_ns = 0;
+        hitches = 0;
         if (fps_start.tv_sec && frames) void_thunk_stats(frames);
         draws_start = draw_calls;
         swap_start_ns = swap_ns;
@@ -1517,11 +1588,42 @@ void d3d_gl_present(d3d_device *dev)
          * game's loop waits here instead of drawing the same picture again.
          * The wait ends a little before the period is up, so the swap still
          * meets the vertical blank that completes it. */
-        static uint64_t paced_end;
+        static uint64_t paced_end, limit_next;
+        uint32_t limit_period;
+        int interval = frame_limit_plan(&limit_period);
+        if (interval != swap_interval_set) {
+            eglSwapInterval(egl_display, interval);
+            swap_interval_set = interval;
+        }
+        static uint32_t limit_logged = UINT32_MAX;
+        uint32_t limit_state = (uint32_t)interval << 24 | limit_period;
+        if (limit_state != limit_logged && atomic_load(&frame_limit_hz)) {
+            limit_logged = limit_state;
+            void_log("[gl] frame limit %u on a %.1f Hz display: %s", atomic_load(&frame_limit_hz),
+                atomic_load(&display_refresh_mhz) / 1000.0, interval > 1 ? "a frame each few refreshes"
+                : limit_period ? "paced by the clock" : "the display's own rate");
+        }
         uint32_t period = void_hud_frame_period();
         if (period != period_logged) {
             period_logged = period;
             void_log("[gl] still menu: %s", period ? "a frame each period" : "full rate");
+        }
+        /* A limit no swap interval keeps: frames a period apart on average,
+         * on a timeline the waits do not reset (a slow frame starts it again). */
+        if (limit_period && !period) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            uint64_t t = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec, step = (uint64_t)limit_period * 1000ull;
+            if (limit_next > t + 1000000ull && limit_next - t < 100000000ull) {
+                struct timespec rest = { 0, (long)(limit_next - t - 1000000ull) };
+                void_blocking_begin();
+                nanosleep(&rest, NULL);
+                void_blocking_end();
+                t = limit_next - 1000000ull;
+            }
+            limit_next = limit_next && t < limit_next + step ? limit_next + step : t + step;
+        } else {
+            limit_next = 0;
         }
         if (period && paced_end) {
             struct timespec now;

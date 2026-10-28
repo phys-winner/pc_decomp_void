@@ -107,6 +107,13 @@ for lang, values in {
     TEXTS[lang].update(zip(("menu_button", "action_button", "body_button"), values))
 
 for lang, value in {
+    "ru": "Отражения в воде",
+    "de": "Spiegelungen im Wasser",
+    "en": "Water reflections",
+}.items():
+    TEXTS[lang]["reflections"] = value
+
+for lang, value in {
     "ru": "Инверсия вертикали гироскопа",
     "de": "Gyroskop-Blick vertikal umkehren",
     "en": "Invert vertical gyroscope look",
@@ -153,12 +160,15 @@ def pages(t):
         [Slider("PortRenderScale", t["render"], 100, lo=50, hi=150, step=10, suffix=" %"),
          Slider("PortUIScale", t["ui"], 100, lo=70, hi=150, step=10, suffix=" %"),
          Slider("PortHDR", t["hdr"], 2, kind="list", values=[0, 1, 2], names=[t["off"], t["simple"], t["full"]])],
-        [Slider("PortAnisotropy", t["aniso"], 16, kind="list", values=[0, 2, 4, 8, 16],
+        [Slider("PortAnisotropy", t["aniso"], 4, kind="list", values=[0, 2, 4, 8, 16],
                 names=[t["off"], "2x", "4x", "8x", "16x"]),
          Slider("PortLightmapQuality", t["light"], 0, kind="list", values=[2, 1, 0],
                 names=[t["low"], t["medium"], t["high"]]),
          Check("PortTextureQuality", t["textures"], True, on="0", off="1"),
-         Check("PortSoundRate", t["sound"], True, on="44", off="22")])
+         Check("PortSoundRate", t["sound"], True, on="44", off="22"),
+         # A water mirror draws the scene a second time (a quarter of the frame
+         # at the lake Ire); off, its reflection is black (renderer_native.c).
+         Check("PortReflections", t["reflections"], True)])
     second = (
         [Slider("PortGyro", t["gyro"], 0, kind="gyro"),
          Slider("PortButtonSize", t["size"], 100, lo=70, hi=150, step=10, suffix=" %"),

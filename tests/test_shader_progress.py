@@ -36,7 +36,7 @@ def native_lookup():
     sys.path.insert(0, str(ROOT / "tools"))
     from build_x86_incremental import compiler_environment
     native = (ROOT / "android/host/d3dx9.c").read_text()
-    functions = []
+    functions = [re.search(r"^static void error_answer\([^\n]+\)\n\{.*?^\}", native, re.M | re.S).group()]
     for name in ("void_d3dx_set_packaged_cache_dir", "cache_bytecode_valid", "cache_answer_in", "bundle_disabled", "cache_answer"):
         functions.append(re.search(r"^(?:static int|void) " + name + r"\([^\n]+\)\n\{.*?^\}",
                                    native, re.M | re.S).group())

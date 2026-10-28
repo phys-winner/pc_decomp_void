@@ -133,11 +133,16 @@ static void warm_shaders(int first, int last)
 #ifndef VOID_ANDROID_APP
     void_shader_warming = 1;
 #endif
+    extern int void_shader_pregenerating;   /* d3dx9.c: SM3 variants recorded for the PC, others refused */
+    void_shader_pregenerating = 1;
     for (int i = first - 1; i < last; ++i) {
+        uint64_t t0 = void_monotonic_ns();
         uint32_t ok = void_call_guest_this(0x16203D50u, effects[i] + 0xC, 0, NULL);
         ready += (ok & 0xFF) != 0;
-        void_log("[shaderwarm] effect %d/%d: %s", i + 1, count, (ok & 0xFF) ? "ready" : "unbounded");
+        void_log("[shaderwarm] effect %d/%d: %s (%llu ms)", i + 1, count, (ok & 0xFF) ? "ready" : "unbounded",
+            (unsigned long long)((void_monotonic_ns() - t0) / 1000000ull));
     }
+    void_shader_pregenerating = 0;
 #ifndef VOID_ANDROID_APP
     void_shader_warming = 0;
 #endif

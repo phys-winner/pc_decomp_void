@@ -107,6 +107,7 @@ void void_eh_reset_thread(void);
 /* threads.c */
 void void_threads_init(void);
 void void_host_thread_init(void);
+void void_threads_prefer_small_cores(void);
 void void_wait_broadcast(void);
 uint32_t void_wait_extra_cond(int count, const uint32_t *handles, uint32_t timeout,
     int (*extra)(void *), void *arg);
@@ -213,6 +214,7 @@ const void_shim *void_shim_find(const char *dll, const char *name, uint32_t ordi
 /* --------------------------------------------------------------- modules */
 typedef struct void_module void_module;
 int void_modules_init(const char *image_dir);
+int void_modules_init_only(const char *image_dir, const char *only);
 /* LoadLibrary / GetModuleHandle / GetProcAddress / FreeLibrary semantics. */
 uint32_t void_module_load(const char *name);
 uint32_t void_module_handle(const char *name);
@@ -280,6 +282,10 @@ int void_file_host_fd(uint32_t handle);
 /* -------------------------------------------------------------- time */
 uint64_t void_now_100ns(void);       /* FILETIME epoch */
 uint64_t void_monotonic_ns(void);
+/* d3d9_gl.c: frames a second the game is shown at, smoothed (0 before the second frame). */
+double void_present_rate(void);
+/* d3d9_gl.c: frames shown so far (the game thread's frame clock). */
+uint32_t void_frames_presented(void);
 uint32_t void_tick_ms(void);
 void void_set_time_scale(double scale);
 /* Stop (1) or restart (0) the game's clock: the app in the background. */

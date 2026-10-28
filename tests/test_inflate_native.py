@@ -154,9 +154,13 @@ def main():
     syntax = subprocess.run([str(CLANG), *HOST_FLAGS, "-DVOID_ANDROID_APP", "-I" + str(ROOT / "android/host"), "-fsyntax-only", str(helper_path)], cwd=ROOT, capture_output=True, text=True)
     (OUT / "android-syntax.txt").write_text(syntax.stdout + syntax.stderr)
     assert syntax.returncode == 0, syntax.stderr
+    # Tension (tools/lift_release.py) overrides its twins of these bodies, never the 2009 names.
     release = subprocess.run([str(CLANG), *HOST_FLAGS, "-DVOID_RELEASE", "-I" + str(ROOT / "android/host"),
-                              "-E", "-P", str(helper_path)], cwd=ROOT, capture_output=True, text=True)
+                              "-I" + str(ROOT / "generated/tension"), "-E", "-P", str(helper_path)],
+                             cwd=ROOT, capture_output=True, text=True)
+    twins = re.findall(r"^#define RENDERER_INFLATE\w* (sub_[0-9A-F]{8})$", (ROOT / "generated/tension/release_overrides.h").read_text(), re.M)
     assert release.returncode == 0 and all("void " + n + "(void)" not in release.stdout for n in names[:4])
+    assert len(twins) == 4 and all("void " + n + "(void)" in release.stdout for n in twins), twins
     selected = corpus[:1] if "--quick" in sys.argv else corpus
     configs = [(0, 0), (0, 1), (1, 0), (1, 1)]
     results = []

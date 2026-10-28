@@ -413,8 +413,69 @@ void d3d_texture_level_size(d3d_texture *t, uint32_t level, uint32_t *w, uint32_
     level_dims(t->width, t->height, level, w, h);
 }
 
+/* The game's DXT blocks as they are, where the GPU samples S3TC: a quarter
+ * to an eighth of the decoded texels' memory and bandwidth. Not for volumes
+ * (decoded 3D storage) nor textures the GPU writes or mipmaps itself. */
+static GLenum s3tc_internal(const d3d_format *f, uint32_t rtype, uint32_t usage)
+{
+    if (!d3d_gl_caps.s3tc || rtype == D3DRTYPE_VOLUMETEXTURE || (usage & (D3DUSAGE_AUTOGENMIPMAP | D3DUSAGE_RENDERTARGET)))
+        return 0;
+    switch (f->conv) {
+    case CONV_DXT1: return 0x83F1;   /* COMPRESSED_RGBA_S3TC_DXT1_EXT: D3D's transparent black */
+    case CONV_DXT3: return 0x83F2;
+    case CONV_DXT5: return 0x83F3;
+    default: return 0;
+    }
+}
+
+static int block_internal(GLenum internal)
+{
+    return (internal >= 0x83F0 && internal <= 0x83F3) || internal == 0x9274 || internal == 0x9278 ||
+           (internal >= 0x93B0 && internal <= 0x93BD);
+}
+
+/* Allocate t's GL storage in `internal`; a block format the driver refuses
+ * falls back to the decoded one (S3TC then stays off). */
+static void texture_storage(d3d_texture *t, GLenum internal)
+{
+    const d3d_format *f = t->fmt;
+    uint32_t gl_levels = t->levels, most = mip_levels(t->gw, t->gh, 1);
+    if (t->rtype == D3DRTYPE_TEXTURE && gl_levels > most) gl_levels = most;
+    for (;;) {
+        if (internal != f->internal && block_internal(internal)) while (glGetError()) {}   /* only this storage's error decides */
+        glGenTextures(1, &t->gl);
+        d3d_gl_upload_unit();
+        glBindTexture(t->target, t->gl);
+        if (t->target == GL_TEXTURE_3D)
+            glTexStorage3D(GL_TEXTURE_3D, (GLsizei)t->levels, internal, (GLsizei)t->width, (GLsizei)t->height, (GLsizei)t->depth);
+        else
+            glTexStorage2D(t->target, (GLsizei)gl_levels, internal, (GLsizei)t->gw, (GLsizei)t->gh);
+        GLenum e = glGetError();
+        if (e && internal != f->internal && block_internal(internal)) {
+            void_log("[d3d9] block format %04X refused (GL error %04X): decoded instead", internal, e);
+            if (internal >= 0x83F0 && internal <= 0x83F3) d3d_gl_caps.s3tc = 0;
+            glDeleteTextures(1, &t->gl);
+            t->gl = 0;
+            internal = f->internal;
+            continue;
+        }
+        if (e) void_log("[d3d9] texture %ux%u levels %u format %u: GL error %04X", t->width, t->height, t->levels, t->format, e);
+        break;
+    }
+    t->gl_internal = internal;
+    t->compressed = internal != f->internal && block_internal(internal);
+    glTexParameteri(t->target, GL_TEXTURE_MAX_LEVEL, (GLint)t->levels - 1);
+    apply_swizzle(t->target, f, t->usage);
+}
+
 d3d_texture *d3d_texture_new(d3d_device *dev, uint32_t rtype, uint32_t w, uint32_t h, uint32_t d,
     uint32_t levels, uint32_t usage, uint32_t format, uint32_t pool)
+{
+    return d3d_texture_new_as(dev, rtype, w, h, d, levels, usage, format, pool, 0);
+}
+
+d3d_texture *d3d_texture_new_as(d3d_device *dev, uint32_t rtype, uint32_t w, uint32_t h, uint32_t d,
+    uint32_t levels, uint32_t usage, uint32_t format, uint32_t pool, GLenum internal)
 {
     const d3d_format *f = d3d_format_find(format);
     if (!f || !w || !h) return NULL;
@@ -436,21 +497,47 @@ d3d_texture *d3d_texture_new(d3d_device *dev, uint32_t rtype, uint32_t w, uint32
     if (pool != D3DPOOL_SYSTEMMEM && pool != D3DPOOL_SCRATCH && f->internal) {
         if (rtype == D3DRTYPE_TEXTURE) gl_dims(w, h, usage, pool, &t->gw, &t->gh);
         else { t->gw = w; t->gh = h; }
-        uint32_t gl_levels = levels, most = mip_levels(t->gw, t->gh, 1);
-        if (rtype == D3DRTYPE_TEXTURE && gl_levels > most) gl_levels = most;
-        glGenTextures(1, &t->gl);
-        d3d_gl_upload_unit();
-        glBindTexture(t->target, t->gl);
-        if (t->target == GL_TEXTURE_3D)
-            glTexStorage3D(GL_TEXTURE_3D, (GLsizei)levels, f->internal, (GLsizei)w, (GLsizei)h, (GLsizei)t->depth);
-        else
-            glTexStorage2D(t->target, (GLsizei)gl_levels, f->internal, (GLsizei)t->gw, (GLsizei)t->gh);
-        glTexParameteri(t->target, GL_TEXTURE_MAX_LEVEL, (GLint)levels - 1);
-        apply_swizzle(t->target, f, usage);
-        GLenum e = glGetError();
-        if (e) void_log("[d3d9] texture %ux%u levels %u format %u: GL error %04X", w, h, levels, format, e);
+        if (!internal) internal = s3tc_internal(f, rtype, usage);
+        /* Block storage only at the texture's own size (a scaled target is no block texture). */
+        if (!internal || t->gw != w || t->gh != h) internal = f->internal;
+        texture_storage(t, internal);
     }
     return t;
+}
+
+/* A converted texture the game writes into: back to the DXT path, its levels
+ * again from the guest copies (D3D keeps one of a managed texture). */
+static void texture_unconvert(d3d_texture *t)
+{
+    void_log("[d3d9] a converted %ux%u texture is written by the game: back to its DXT data", t->width, t->height);
+    d3d_gl_forget_texture(t->gl);
+    glDeleteTextures(1, &t->gl);
+    t->gl = 0;
+    t->converted = 0;
+    GLenum internal = s3tc_internal(t->fmt, t->rtype, t->usage);
+    texture_storage(t, internal ? internal : t->fmt->internal);
+    if (!t->sysmem) return;
+    for (int face = 0; face < t->faces; ++face)
+        for (uint32_t l = 0; l < t->levels; ++l) {
+            uint32_t mem = t->sysmem[(uint32_t)face * t->levels + l];
+            if (!mem) continue;
+            uint32_t w, h;
+            level_dims(t->width, t->height, l, &w, &h);
+            d3d_texture_upload_level(t, (uint32_t)face, l, (const uint8_t *)GPTR(mem), d3d_format_pitch(t->fmt, w));
+        }
+}
+
+void d3d_texture_upload_blocks(d3d_texture *t, uint32_t face, uint32_t level, const uint8_t *blocks, size_t bytes)
+{
+    if (!t->gl || !t->compressed || t->target == GL_TEXTURE_3D) return;
+    uint32_t w, h;
+    level_dims(t->width, t->height, level, &w, &h);
+    d3d_gl_upload_unit();
+    glBindTexture(t->target, t->gl);
+    glCompressedTexSubImage2D(face_target(t, face), (GLint)level, 0, 0, (GLsizei)w, (GLsizei)h, t->gl_internal,
+        (GLsizei)bytes, blocks);
+    GLenum e = glGetError();
+    if (e) void_log("[d3d9] blocks %ux%u level %u format %04X: GL error %04X", w, h, level, t->gl_internal, e);
 }
 
 uint32_t d3d_wrap_texture(d3d_texture *t)
@@ -488,6 +575,27 @@ void d3d_texture_upload_rect(d3d_texture *t, uint32_t face, uint32_t level, uint
     const uint8_t *data, uint32_t pitch)
 {
     if (!t->gl || !w || !h) return;
+    if (t->converted) texture_unconvert(t);
+    if (t->compressed && t->target != GL_TEXTURE_3D) {
+        /* The game's DXT blocks as they are: whole block rows, tightly packed. */
+        uint32_t row = d3d_format_pitch(t->fmt, w), rows = d3d_format_rows(t->fmt, h);
+        const uint8_t *blocks = data;
+        uint8_t *packed = NULL;
+        if (pitch != row && rows > 1) {
+            packed = (uint8_t *)malloc((size_t)row * rows);
+            for (uint32_t r = 0; r < rows; ++r) memcpy(packed + (size_t)r * row, data + (size_t)r * pitch, row);
+            blocks = packed;
+        }
+        d3d_gl_upload_unit();
+        glBindTexture(t->target, t->gl);
+        glCompressedTexSubImage2D(face_target(t, face), (GLint)level, (GLint)x, (GLint)y, (GLsizei)w, (GLsizei)h, t->gl_internal,
+            (GLsizei)((size_t)row * rows), blocks);
+        GLenum e = glGetError();
+        if (e) void_log("[d3d9] upload %ux%u blocks at %u,%u level %u format %04X: GL error %04X", w, h, x, y, level,
+            t->gl_internal, e);
+        free(packed);
+        return;
+    }
     if (t->gw != t->width || t->gh != t->height) warn_scaled_upload(t->width, t->height);
     void *owned;
     size_t size;
@@ -519,7 +627,7 @@ void d3d_texture_upload_level(d3d_texture *t, uint32_t face, uint32_t level, con
 
 void d3d_generate_mips(d3d_texture *t)
 {
-    if (!t->gl || t->levels < 2) return;
+    if (!t->gl || t->levels < 2 || t->compressed) return;   /* GL makes no mipmaps of block formats */
     d3d_gl_upload_unit();
     glBindTexture(t->target, t->gl);
     glGenerateMipmap(t->target);

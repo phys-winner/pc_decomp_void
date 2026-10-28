@@ -63,7 +63,13 @@ NATIVE_OVERRIDES = (
     # (android/host/theora_native.c).
     "sub_15018800", "sub_15018ED0",
     "sub_16082260",   # RendererD3D: reserved 12-byte triangle append (renderer_native.c)
+    "sub_1616AED0",   # RendererD3D: scene-render pass, water reflections switchable (renderer_native.c)
+    # RendererD3D: the pass builder and one split's compile, a variant left to the
+    # shader compile service fails the build at once (renderer_native.c, d3dx9.c).
+    "sub_161FCEC0", "sub_161F8460",
+    "sub_1110BF90",   # Engine: the log line, quiet within such a build (renderer_native.c)
     "sub_16013760",   # RendererD3D: weighted region lighting (renderer_region_native.c)
+    "sub_16014090",   # RendererD3D: an object's region walk, remembered while it stays (renderer_region_native.c)
     "sub_16120040",   # RendererD3D: guarded Adler32 through system libz (renderer_adler_native.c)
     # Main RendererD3D: persistent default-allocator inflate lifecycle (renderer_inflate_native.c).
     "sub_1611E830", "sub_1611E7D0", "sub_1611E9F0", "sub_1611FFF0",
@@ -71,6 +77,7 @@ NATIVE_OVERRIDES = (
     "sub_1105E810",   # Engine: identical SAT, guarded by its own live epsilon
     "sub_181802C0",   # PhysX: reserved debug-line append (physics_native.c)
     "sub_110014F0",   # Engine: debug-vector append, preserving ECX (physics_native.c)
+    "sub_110DE7C0",   # Engine: CScene::fetch, the physics step follows the shown rate (physx.c)
     # The CRT memcpy/memmove body of every module (android/host/crt_native.c).
     "sub_0041C740", "sub_004208C0", "sub_10128710", "sub_101292D0", "sub_11074800", "sub_11076D60",
     "sub_12014140", "sub_12015110", "sub_1300E530", "sub_1300F830", "sub_14047F80", "sub_140484C0",
@@ -270,12 +277,19 @@ GENERATED = ROOT / "generated"
 RELEASE = None
 
 
+def module_dir(module):
+    """A module's generated sources: the release's own, or a module it shares
+    with the 2009 stage (release.json shared_modules: the lifted HLSL compiler)."""
+    shared = (RELEASE or {}).get("shared_modules", {})
+    return ROOT / shared[module] if module in shared else GENERATED / f"{module}-x86"
+
+
 def module_image(module):
     """The image a generated module was lifted from, checked against its report."""
     if module not in _images:
         game = json.loads((ROOT / "port.json").read_text())["game_directory"]
         image = Image(MODULE_IMAGES[module].format(game=game))
-        report = json.loads((GENERATED / f"{module}-x86/report.json").read_text())
+        report = json.loads((module_dir(module) / "report.json").read_text())
         expected = report.get("rebased_sha256") or report.get("binary_sha256")
         if expected and expected != image.sha256:
             raise SystemExit(f"{module}: image {MODULE_IMAGES[module]} does not match report.json")
@@ -383,14 +397,23 @@ def private_renderer_sat(text):
 
 
 def host_source(source):
-    if RELEASE is not None or source.name != "renderer_region_native.c":
+    if source.name != "renderer_region_native.c":
         return source
-    assert module_image("renderer").u32(0x162D2A64) == 0x3f7fffef
-    assert module_image("engine").u32(0x11122CE0) == 0x3f7fffef
+    # The helper is made from the 2009 stage's bodies; a release runs it where
+    # it has their twins (tools/lift_release.py: same bytes but for addresses).
+    epsilons = {"renderer": 0x162D2A64, "engine": 0x11122CE0}
+    if RELEASE is not None:
+        twins = RELEASE.get("twin_constants", {})
+        if "RENDERER_SAT_EPSILON" not in twins or "ENGINE_SAT_EPSILON" not in twins:
+            return source
+        epsilons = {"renderer": int(twins["RENDERER_SAT_EPSILON"], 16), "engine": int(twins["ENGINE_SAT_EPSILON"], 16)}
+    for module, epsilon in epsilons.items():
+        assert module_image(module).u32(epsilon) == 0x3f7fffef
+    stage = ROOT / "generated"
     engine = re.search(rb"^void sub_1105E810\(void\) \{.*?^\}",
-        (GENERATED / "engine-x86/engine_0023.c").read_bytes(), re.M | re.S)
+        (stage / "engine-x86/engine_0023.c").read_bytes(), re.M | re.S)
     assert engine and hashlib.sha256(engine[0].replace(b"\r\n", b"\n")).hexdigest() == "d41140ee11f33afc37f24da52a3f33bde6b4327b036642124a0aa1a00a373a2d"
-    helper = private_renderer_sat((GENERATED / "renderer-x86/renderer_0074.c").read_bytes()).encode()
+    helper = private_renderer_sat((stage / "renderer-x86/renderer_0074.c").read_bytes()).encode()
     content = source.read_bytes()
     assert content.count(b"/* GENERATED_REGION_SAT */") == 1
     content = content.replace(b"/* GENERATED_REGION_SAT */", helper)
@@ -411,19 +434,21 @@ def sha_file(path):
 
 def available_modules():
     """Generated stages present on disk (PhysX joins once tools/lift_physx.py has run)."""
-    return [m for m in MODULES if (GENERATED / f"{m}-x86/report.json").exists()]
+    return [m for m in MODULES if (module_dir(m) / "report.json").exists()]
 
 
 def generated_sources():
     sources = []
     modules = available_modules()
     for name in modules:
-        report = json.loads((GENERATED / f"{name}-x86/report.json").read_text())
+        report = json.loads((module_dir(name) / "report.json").read_text())
         files = report.get("sources")
         if not isinstance(files, list) or not files:
             raise SystemExit(f"{name}: report.json has no source list")
-        sources += [GENERATED / f"{name}-x86" / f for f in files]
-    dispatch = GENERATED / f"{modules[-1]}-x86/recomp_dispatch.c"
+        sources += [module_dir(name) / f for f in files]
+    # The merged table is in the last module the stage lifted itself.
+    own = [m for m in modules if m not in (RELEASE or {}).get("shared_modules", {})]
+    dispatch = module_dir(own[-1]) / "recomp_dispatch.c"
     if dispatch.is_file():   # absent while a release is still being lifted (--compile-only)
         sources.append(dispatch)
     return sources
@@ -505,7 +530,7 @@ def main():
                        "images": {m["prefix"]: r["input_image"] for m, r in zip(done, reports)}}
         else:
             raise SystemExit(f"run tools/lift_release.py {args.release} (or --finish) first")
-        MODULES = tuple(RELEASE["modules"])
+        MODULES = tuple(RELEASE["modules"]) + tuple(RELEASE.get("shared_modules", {}))
         MODULE_IMAGES = dict(RELEASE["images"])
         NATIVE_OVERRIDES = tuple(RELEASE["native_overrides"]) + ("sub_1017D3C0", "sub_101C4FC0", "sub_101BE240")
         args.no_pgo = True
@@ -544,12 +569,13 @@ def main():
     runtime_headers = [ROOT / "android/runtime/recomp_types.h"]
     # A module's sources see the runtime and their own headers; the merged
     # dispatch table (last module) sees every module's headers.
-    module_digest = {name: header_digest(runtime_headers + sorted((GENERATED / f"{name}-x86").glob("*.h")))
+    module_digest = {name: header_digest(runtime_headers + sorted(module_dir(name).glob("*.h")))
                      for name in available_modules()}
     gen_digest = header_digest(runtime_headers + sorted(p for name in available_modules()
-                                                        for p in (GENERATED / f"{name}-x86").glob("*.h")))
+                                                        for p in module_dir(name).glob("*.h")))
     release_headers = [GENERATED / "release_overrides.h"] if args.release and not args.compile_only else []
     host_digest = header_digest(runtime_headers + sorted((ROOT / "android/host").glob("*.h")) +
+                                [ROOT / "android/texconv/tvtx.h"] +
                                 [ROOT / "reference/dlmalloc/malloc.c"] + release_headers)
     jobs = []
     if not args.host_only:

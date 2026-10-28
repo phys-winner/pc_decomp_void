@@ -62,6 +62,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private static native void nativeSetFontScale(float scale);
     private static native void nativeSetPhysicalSize(int width, int height);
     private static native void nativeSetDisplayRate(float hz);
+    private static native void nativeSetFrameLimit(int hz);
+    static native void nativeSetReflections(boolean on);
+    private static native boolean nativeCompileService(String page);
+    private static native void nativeSetDisplayRefresh(float hz);
     private static native void nativePause(boolean paused);
 
     /** A copy of the game (the launcher's choice: a folder anywhere, or
@@ -155,6 +159,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     void applyPortSettings() {
         nativeSetGameplayOptions(settings.fieldOfView, settings.veinBrightness);
+        nativeSetReflections(settings.reflections);   /* water mirrors (renderer_native.c) */
         nativeConsoleCommand("setting PortTouchInput " + ((controls != null ? controls.touchAdaptations() : settings.touchAdaptations) ? "1" : "0"));
         /* Head bobbing is read from the game's own Settings by a player.bin
          * patch (per jump), so a change must reach the live Settings, not only
@@ -299,6 +304,16 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             settings.sensitivityDefaulted = true;
             settings.save();
         }
+        /* The default filtering is x4 (x16 took a third of the frames of an
+         * Adreno 618 in Memory and Ostov): the earlier default goes over once. */
+        if (!settings.anisotropyDefaulted) {
+            if (settings.anisotropy == 16) {
+                settings.anisotropy = 4;
+                Profile.setProps(gameSettings, java.util.Collections.singletonMap("PortAnisotropy", "4"));
+            }
+            settings.anisotropyDefaulted = true;
+            settings.save();
+        }
         /* What Config.exe would have written, from the additional settings:
          * read by the game as it starts. */
         android.graphics.Point real = new android.graphics.Point();
@@ -339,15 +354,30 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
          * render height of 540 whatever the render scale, times the interface scale. */
         nativeSetFontScale(1f);
         nativeSetPhysicalSize(size[0], size[1]);
-        /* The physics steps at the display's fastest rate (a game draws at it). */
-        float hz = getWindowManager().getDefaultDisplay().getRefreshRate();
+        /* The physics steps at the display's fastest rate (a game draws at it),
+         * or at the player's frame limit: the display is asked for the mode of
+         * that rate, and the host keeps to the limit should it stay faster. */
+        android.view.Display display = getWindowManager().getDefaultDisplay();
+        float hz = display.getRefreshRate();
         if (android.os.Build.VERSION.SDK_INT >= 23)
-            for (android.view.Display.Mode m : getWindowManager().getDefaultDisplay().getSupportedModes())
-                if (m.getPhysicalHeight() == getWindowManager().getDefaultDisplay().getMode().getPhysicalHeight())
+            for (android.view.Display.Mode m : display.getSupportedModes())
+                if (m.getPhysicalHeight() == display.getMode().getPhysicalHeight())
                     hz = Math.max(hz, m.getRefreshRate());
+        int limit = settings.fpsLimit > 0 && settings.fpsLimit < Math.round(hz) ? settings.fpsLimit : 0;
+        android.view.Display.Mode limited = limit > 0 ? Settings.modeFor(display, limit) : null;
+        android.view.WindowManager.LayoutParams attributes = getWindow().getAttributes();
+        attributes.preferredDisplayModeId = limited != null ? limited.getModeId() : 0;
+        getWindow().setAttributes(attributes);
+        nativeSetFrameLimit(limit);
+        nativeSetDisplayRefresh(display.getRefreshRate());
+        android.util.Log.i("TheVoid", "frame limit " + (limit > 0 ? limit + " (display mode " + (limited != null
+            ? limited.getModeId() : "none") + ")" : "none"));
+        if (limit > 0) hz = limit;
         nativeSetDisplayRate(hz);
         nativeSetGameplayOptions(settings.fieldOfView, settings.veinBrightness);
+        nativeSetReflections(settings.reflections);
         android.util.Log.i("TheVoid", "display refresh up to " + hz + " Hz");
+        bindCompileService(release, data, images);
         started = running = nativeStart(release.dir.getAbsolutePath(), data.getAbsolutePath(),
                 images.getAbsolutePath(), new File(getFilesDir(), "shadercache").getAbsolutePath(),
                 game[0], game[1], new File(base, "verbose").exists());
@@ -592,7 +622,20 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     private long pausedAt;
 
+    /* The display's present refresh (a mode asked for comes later, or not at
+     * all): the host's frame limit depends on it (d3d9_gl.c). */
+    private final android.hardware.display.DisplayManager.DisplayListener refreshListener =
+        new android.hardware.display.DisplayManager.DisplayListener() {
+            @Override public void onDisplayAdded(int id) {}
+            @Override public void onDisplayRemoved(int id) {}
+            @Override public void onDisplayChanged(int id) {
+                if (id == android.view.Display.DEFAULT_DISPLAY && started)
+                    nativeSetDisplayRefresh(getWindowManager().getDefaultDisplay().getRefreshRate());
+            }
+        };
+
     @Override protected void onPause() {
+        getSystemService(android.hardware.display.DisplayManager.class).unregisterDisplayListener(refreshListener);
         resumed = false;
         nativePreparation.reset();
         if (preparationPanel != null) preparationPanel.removeCallbacks(preparationTick);
@@ -606,6 +649,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override protected void onResume() {
         super.onResume();
+        getSystemService(android.hardware.display.DisplayManager.class).registerDisplayListener(refreshListener, null);
+        if (started) nativeSetDisplayRefresh(getWindowManager().getDefaultDisplay().getRefreshRate());
         resumed = true;
         if (preparationPanel != null) {
             preparationPanel.removeCallbacks(preparationTick);
@@ -621,7 +666,38 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
     }
 
+    /* The shader compile service, in the game's own library: a variant the
+     * caches lack is compiled there while the game draws on.
+     * <profile>/shadercache/no-compile-service, or no on-device compiler,
+     * leaves it out: the game compiles such a variant itself, in the frame. */
+    private android.content.ServiceConnection compileService;
+
+    private void bindCompileService(Release release, File data, File images) {
+        File cache = new File(data, "shadercache");
+        if (new File(cache, "no-compile-service").exists() || new File(cache, "no-device-compile").exists()) return;
+        File page = new File(getFilesDir(), "shaderservice");
+        if (!nativeCompileService(page.getAbsolutePath())) return;
+        android.content.Intent i = new android.content.Intent(this, ShaderCompilerService.class)
+            .putExtra(ShaderCompilerService.LIBRARY, release.library)
+            .putExtra(ShaderCompilerService.GAME, release.dir.getAbsolutePath())
+            .putExtra(ShaderCompilerService.DATA, data.getAbsolutePath())
+            .putExtra(ShaderCompilerService.IMAGES, images.getAbsolutePath())
+            .putExtra(ShaderCompilerService.PAGE, page.getAbsolutePath());
+        android.content.ServiceConnection connection = new android.content.ServiceConnection() {
+            @Override public void onServiceConnected(android.content.ComponentName name, android.os.IBinder binder) {}
+            @Override public void onServiceDisconnected(android.content.ComponentName name) {
+                android.util.Log.w("TheVoid", "shader compile service lost");
+            }
+        };
+        if (bindService(i, connection, BIND_AUTO_CREATE)) compileService = connection;
+        else android.util.Log.w("TheVoid", "shader compile service unavailable");
+    }
+
     @Override protected void onDestroy() {
+        if (compileService != null) {
+            unbindService(compileService);
+            compileService = null;
+        }
         if (preparation != null) preparation.interrupt();
         if (preparationPanel != null) preparationPanel.removeCallbacks(preparationTick);
         super.onDestroy();

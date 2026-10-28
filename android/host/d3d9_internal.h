@@ -147,6 +147,11 @@ struct d3d_texture {
     uint32_t applied_base_level;
     uint32_t hud_tag;             /* a HUD image the touch layer reacts to (hud.h) */
     uint32_t hud_slot;            /* an image whose draws the touch layer measures (hud.h) */
+    /* The GL storage: fmt->internal, or blocks the GPU samples as they are --
+     * the game's own DXT (S3TC) or its converted copy (ETC2/ASTC, tvtx.h). */
+    GLenum gl_internal;
+    int compressed;               /* gl_internal holds blocks: uploads are glCompressedTexSubImage */
+    int converted;                /* a converted copy: a write by the game goes back to the DXT path */
 };
 
 typedef struct d3d_buffer {
@@ -289,6 +294,12 @@ GLuint d3d_surface_gl_texture(d3d_surface *s, GLenum *target, GLint *level, GLin
 uint32_t d3d_texture_surface(d3d_texture *t, uint32_t face, uint32_t level);
 d3d_texture *d3d_texture_new(d3d_device *dev, uint32_t rtype, uint32_t w, uint32_t h, uint32_t d,
     uint32_t levels, uint32_t usage, uint32_t format, uint32_t pool);
+/* The same with a chosen GL storage format (0: as d3d_texture_new chooses;
+ * fmt->internal: the decoded path; a block format: its blocks). */
+d3d_texture *d3d_texture_new_as(d3d_device *dev, uint32_t rtype, uint32_t w, uint32_t h, uint32_t d,
+    uint32_t levels, uint32_t usage, uint32_t format, uint32_t pool, GLenum internal);
+/* A whole level's blocks in the texture's own block format (gl_internal). */
+void d3d_texture_upload_blocks(d3d_texture *t, uint32_t face, uint32_t level, const uint8_t *blocks, size_t bytes);
 uint32_t d3d_wrap_texture(d3d_texture *t);
 void d3d_texture_level_size(d3d_texture *t, uint32_t level, uint32_t *w, uint32_t *h);
 void d3d_texture_upload_level(d3d_texture *t, uint32_t face, uint32_t level, const uint8_t *guest_data,
@@ -305,6 +316,9 @@ void d3d_stateblock_apply(d3d_stateblock *sb);
 /* GL implementation limits, filled by d3d_gl_init (0 before). */
 typedef struct { uint32_t max_texture, max_3d_texture, max_draw_buffers; } d3d_gl_limits_t;
 extern d3d_gl_limits_t d3d_gl_limits;
+/* Block formats the GPU samples directly (ETC2 is GLES 3.0 core). */
+typedef struct { int s3tc, astc; } d3d_gl_caps_t;
+extern d3d_gl_caps_t d3d_gl_caps;
 int d3d_gl_init(void);
 void d3d_gl_present(d3d_device *dev);
 void d3d_gl_bind_targets(d3d_device *dev);

@@ -26,6 +26,7 @@ typedef struct { uint8_t *bytecode; uint32_t size; } d3d_shader;
 static d3d_shader *failed_vs, *failed_ps;
 static uint64_t failed_program;
 static char packaged_cache_dir[1024], profile_dir[1024], result_data[4096];
+static char learned_cache_dir[1100];   /* the 2009 device's own answers: none in these cases */
 typedef struct { uint32_t data; } dxbuffer_t;
 static dxbuffer_t result_buffer = { 1 };
 #define GPTR(value) (result_data)
@@ -53,6 +54,14 @@ static char *read_all(const char *path, size_t *size)
     assert(!fclose(file));
     *size = (size_t)length;
     return bytes;
+}
+
+/* The APK's pregenerated pack (assets/shaderpack.bin) is consulted last; these
+ * cases have none. */
+static int shader_pack_answer(uint64_t h, uint32_t *out, uint32_t *hr, int binary)
+{
+    (void)h; (void)out; (void)hr; (void)binary;
+    return 0;
 }
 
 #include "cache-answer.h"

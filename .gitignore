@@ -2,6 +2,9 @@
 /*
 !/.gitignore
 !/.gitattributes
+!/.gitmodules
+!/TECHDEBT-2008.md
+!/CLAUDE.md
 !/readme.md
 !/CHANGELOG.md
 !/LICENSE
@@ -13,6 +16,7 @@
 !/android/
 /android/**
 !/android/**/
+!/android/**/*.cpp
 !/android/**/*.c
 !/android/**/*.h
 !/android/**/*.java
@@ -42,6 +46,7 @@
 !/tests/
 /tests/*
 !/tests/*.py
+!/tests/*.cpp
 !/tests/*.c
 !/tests/*.h
 !/tests/*.java
@@ -83,3 +88,10 @@ local.properties
 port.json
 STATE.md
 AGENTS.md
+
+# Local work logs and research are never published.
+/research/
+/STATE.md
+# Pinned upstream encoder submodules.
+!/reference/astcenc/
+!/reference/etcpak/

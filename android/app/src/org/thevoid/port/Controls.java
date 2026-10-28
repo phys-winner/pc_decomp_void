@@ -1802,6 +1802,9 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
             box.addView(heading(Settings.text(Settings.T_MORE)));
             box.addView(slider(Settings.T_FOV, 40f, 100f, settings.fieldOfView, v -> settings.fieldOfView = v));
             box.addView(slider(Settings.T_VEIN_BRIGHTNESS, 1f, 5f, settings.veinBrightness, v -> settings.veinBrightness = v));
+            /* The 2009 game has it on its own options page (tools/patch_options.py). */
+            if (Settings.legacyGame)
+                box.addView(toggle(Settings.T_REFLECTIONS, settings.reflections, v -> settings.reflections = v));
             box.addView(toggle(Settings.T_DEBUG_COMMANDS, settings.debugCommands, v -> settings.debugCommands = v));
             box.addView(toggle(Settings.T_HEAD_BOB, settings.headBob, v -> settings.headBob = v));
             box.addView(toggle(Settings.T_LOOK_ACCEL, settings.lookAccel, v -> settings.lookAccel = v));

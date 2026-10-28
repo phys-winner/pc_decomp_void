@@ -1,5 +1,6 @@
 /* Guest COM object plumbing. */
 #include "com.h"
+#include <stdatomic.h>
 
 #define MAX_OBJECTS 65536
 static void *objects[MAX_OBJECTS];
@@ -40,12 +41,26 @@ uint32_t void_com_wrap(void_com_object *object, void_com_class *cls, uint32_t ex
     return guest;
 }
 
+/* The objects called most (the device, thousands of times a frame): guest VA
+ * and table index as last checked. The table decides again: a released
+ * object (its slot emptied before its memory goes) or a reused slot takes
+ * the full check below. */
+#define RECENT 64u
+static _Atomic uint64_t recent[RECENT];
+
 void *void_com_host(uint32_t guest)
 {
+    _Atomic uint64_t *hint = &recent[(guest >> 3) & (RECENT - 1u)];
+    uint64_t seen = atomic_load_explicit(hint, memory_order_relaxed);
+    if (guest && (uint32_t)(seen >> 32) == guest) {
+        void *object = objects[(uint32_t)seen];
+        if (object && ((void_com_object *)object)->guest == guest) return object;
+    }
     if (!guest || !void_vm_readable(guest, 8)) void_lift_trap(g_cur_func, "COM call on an invalid object");
     uint32_t index = MEM32(guest + 4);
     void *object = index && index < MAX_OBJECTS ? objects[index] : NULL;
     if (!object || ((void_com_object *)object)->guest != guest) void_lift_trap(g_cur_func, "COM call on a released object");
+    atomic_store_explicit(hint, (uint64_t)guest << 32 | index, memory_order_relaxed);
     return object;
 }
 

@@ -29,5 +29,9 @@
     {"name": "PhysXCooking", "prefix": "physxcooking", "base": "0x19000000",
      "file": "{physx}/PhysXCooking.dll",
      "sha256": "dbe5c451bffea7aab489f0ec927c3fb8a0fc87b78cf621b8df69ed01bb266b00"}
+  ],
+  "shared_modules": [
+    {"name": "D3DXCompiler", "prefix": "d3dxcompiler",
+     "note": "Microsoft's HLSL compiler (d3dx9_36.dll, base 0x1A000000) as tools/lift_d3dx.py lifted it for the 2009 build; it calls no game code, so this release loads the same module for its on-device shader compile"}
   ]
 }

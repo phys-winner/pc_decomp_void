@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.thevoid.port"
-    android:versionCode="3" android:versionName="0.2-dev">
+    android:versionCode="4" android:versionName="0.3-dev">
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
   <uses-feature android:glEsVersion="0x00030002" android:required="true" />
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
@@ -27,5 +27,8 @@
         android:excludeFromRecents="true" android:noHistory="true"
         android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     <service android:name=".UnpackService" android:exported="false" />
+    <service android:name=".TextureService" android:exported="false" />
+    <!-- The 2009 game's shader compiler on another core (d3dx9.c void_d3dx_serve). -->
+    <service android:name=".ShaderCompilerService" android:exported="false" android:process=":shaders" />
   </application>
 </manifest>

@@ -27,6 +27,8 @@ def main():
     header = function(sources[1], 'sub_16056EE0')
     header += '\n' + function(sources[0], 'sub_16082260').replace('void sub_16082260(void)', 'void original_append(void)')
     native = sources[2].read_text().replace('#include "host.h"', '')
+    # The append alone: the passes after it call into the host.
+    native = native[:native.index("/* RendererD3D's scene-render pass")]
     driver = (ROOT / 'tests/renderer_append_probe.c').read_text().replace('/* EMITTED */', header).replace('/* NATIVE */', native)
     (out / 'probe.c').write_text(driver)
     compiler, env, _ = compiler_environment()

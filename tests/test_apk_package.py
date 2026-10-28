@@ -60,13 +60,19 @@ def main():
         for label, key, _ in shaders():
             assert key + ".bin" in cached, "missing required shader: " + label + " (" + key + ")"
         libraries = {"libvoid.so": "arm64", "libvoid_tension.so": "arm64-tension"}
-        # lib/ holds only the unpacker; the libraries are xz streams in assets/native.
-        assert {n for n in names if n.startswith("lib/")} == {"lib/arm64-v8a/libvoidxz.so"}
+        # lib/ holds the unpacker and the texture converter; the game libraries are xz streams in assets/native.
+        assert {n for n in names if n.startswith("lib/")} == {"lib/arm64-v8a/libvoidxz.so", "lib/arm64-v8a/libtexconv.so"}
         unpacker = apk.read("lib/arm64-v8a/libvoidxz.so")
         dynstr = elf(unpacker)[".dynstr"][2]
         for symbol in (b"Java_org_thevoid_port_NativeLibrary_nativeUnpack\0",
                        b"Java_org_thevoid_port_NativeLibrary_nativeUnpacked\0"):
             assert symbol in dynstr, symbol
+        dynstr = elf(apk.read("lib/arm64-v8a/libtexconv.so"))[".dynstr"][2]
+        for method in ("Scan", "Convert", "Remove", "Cancel", "Progress", "Message"):
+            symbol = b"Java_org_thevoid_port_Textures_native" + method.encode() + b"\0"
+            assert symbol in dynstr, symbol
+        for encoder in ("astcenc", "etcpak"):
+            assert apk.read(f"assets/licenses/{encoder}.txt") == (ROOT / f"reference/{encoder}/LICENSE.txt").read_bytes(), encoder
         index, chunks = {}, {}
         for line in apk.read("assets/native/index.txt").decode().splitlines():
             name, size, digest, chunk, packed = line.split()
@@ -100,6 +106,26 @@ def main():
             tags = dict(struct.iter_unpack("<qQ", shipped[".dynamic"][2]))
             assert 0x60000011 in tags and 0x60000012 in tags, "missing Android packed RELA"
             assert not ({35, 36, 37, 0x6fffe000} & tags.keys()), "RELR needs a newer Android API"
+        # The pregenerated shader variants: one sorted, deduplicated file (build_game_apk.shader_pack).
+        pack = apk.read("assets/shaderpack.bin")
+        size, digest = apk.read("assets/shaderpack.txt").decode().split()
+        assert len(pack) == int(size) and hashlib.sha256(pack).hexdigest() == digest, "shader pack note"
+        magic, pack_version, count, _ = struct.unpack_from("<4I", pack, 0)
+        assert (magic, pack_version) == (0x4B505356, 1) and 16 + 24 * count <= len(pack), "shader pack header"
+        source = {int(f.stem, 16): (f.suffix, f.read_bytes()) for f in (ROOT / "build/shadercache/pregen-results").glob("*")
+                  if f.suffix in (".bin", ".err")} if (ROOT / "build/shadercache/pregen-results").is_dir() else {}
+        assert count == len(source), ("shader pack entries", count, len(source))
+        # A compile error names the compiling process's folder (<cwd>\memory(line,col)):
+        # answers compiled elsewhere than the repository root may carry a user's folder.
+        user_folder = b":\\Users\\"
+        previous = -1
+        for i in range(count):
+            key, length, kind, offset = struct.unpack_from("<QIIQ", pack, 16 + 24 * i)
+            assert key > previous and offset + length <= len(pack), ("shader pack entry", i)
+            suffix, content = source[key]
+            assert kind == (suffix == ".err") and pack[offset:offset + length] == content, ("shader pack content", hex(key))
+            assert user_folder not in content, ("a user folder in a shader answer", hex(key))
+            previous = key
         checked = 0
         for folder in ("lifted", "lifted-tension", "shadercache", "shaderwarm"):
             prefix = "assets/" + folder + "/"
@@ -109,6 +135,7 @@ def main():
                 target = alias[0] if alias else name
                 content = apk.read(prefix + target)
                 assert len(content) == int(size) and hashlib.sha256(content).hexdigest() == digest, name
+                assert folder != "shadercache" or user_folder not in content, ("a user folder in a shader answer", name)
                 expected.add(prefix + target)
                 checked += 1
             assert {n for n in names if n.startswith(prefix)} == expected, folder

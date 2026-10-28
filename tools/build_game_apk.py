@@ -15,7 +15,9 @@ debuggable APK), which keeps iterations on the touch layer to a small install.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import os
+import struct
 from pathlib import Path
 import shutil
 import subprocess
@@ -88,6 +90,33 @@ def compress_library(stripped):
         table.write_text(",".join(str(len(s)) for s in streams))
         part.replace(out)
     return out, digest, table.read_text()
+
+
+SHADER_PACK_MAGIC = 0x4B505356   # "VSPK"
+
+
+def shader_pack(folder):
+    """Shader answers as one file: "VSPK", version 1, the entry count, 0; then the
+    entries sorted by key, {u64 key, u32 size, u32 kind (0 bytecode, 1 the error
+    Windows gives), u64 offset}; then the contents, each distinct one once
+    (d3dx9.c reads it; tests/test_apk_package.py checks it)."""
+    answers = []
+    for f in sorted(Path(folder).glob("*")) if Path(folder).is_dir() else []:
+        if f.suffix in (".bin", ".err") and len(f.stem) == 16:
+            answers.append((int(f.stem, 16), 0 if f.suffix == ".bin" else 1, f.read_bytes()))
+    answers.sort(key=lambda a: a[0])
+    keys = [a[0] for a in answers]
+    assert len(set(keys)) == len(keys), "a key with both an answer and an error"
+    data, where, entries = bytearray(), {}, bytearray()
+    header = 16 + 24 * len(answers)
+    for key, kind, content in answers:
+        at = where.get(content)
+        if at is None:
+            at = where[content] = header + len(data)
+            data += content
+            data += b"\0" * (-len(data) % 4)
+        entries += struct.pack("<QIIQ", key, len(content), kind, at)
+    return struct.pack("<4I", SHADER_PACK_MAGIC, 1, len(answers), 0) + bytes(entries) + bytes(data)
 
 
 def build_unpacker():
@@ -220,12 +249,29 @@ def main():
             else:
                 index.append(f"{line} {master}\n")
         apk.writestr("assets/shadercache/index.txt", "".join(index))
+        # Every variant the game's own pregenerator makes for the SM3 strategy
+        # (the script's shaderwarm; build/shadercache/pregen-results): looked up
+        # by d3dx9.c when the cache above has no answer, one file the menu's
+        # warm-up does not compile (tens of thousands of stages would hold it
+        # for minutes). Format in shader_pack().
+        pack = shader_pack(ROOT / "build/shadercache/pregen-results")
+        apk.writestr("assets/shaderpack.bin", pack)
+        apk.writestr("assets/shaderpack.txt", f"{len(pack)} {hashlib.sha256(pack).hexdigest()}\n")
         recipes = sorted((ROOT / "build/shaderwarm").glob("*.bin"))
         for f in recipes:
             apk.write(f, "assets/shaderwarm/" + f.name)
         apk.writestr("assets/shaderwarm/index.txt", "".join(f"{f.name} {f.stat().st_size} {sha256(f)}\n" for f in recipes))
         # The unpacker of the libraries below (NativeLibrary.java): a few KB.
         apk.write(build_unpacker(), "lib/arm64-v8a/libvoidxz.so")
+        # The launcher's texture converter (Textures.java, tools/build_texconv.py): DXT into ETC2/ASTC.
+        run(sys.executable, "-B", ROOT / "tools/build_texconv.py")
+        texconv = ROOT / "build/arm64-texconv/libtexconv.so"
+        stripped_texconv = OUT / "libtexconv.so"
+        run(TOOLCHAIN / "bin/llvm-strip.exe", "--strip-unneeded", "-o", stripped_texconv, texconv)
+        apk.write(stripped_texconv, "lib/arm64-v8a/libtexconv.so")
+        # Its encoders' licenses go with their binary form (Apache-2.0, BSD-3-Clause).
+        apk.write(ROOT / "reference/astcenc/LICENSE.txt", "assets/licenses/astcenc.txt")
+        apk.write(ROOT / "reference/etcpak/LICENSE.txt", "assets/licenses/etcpak.txt")
         if not args.java_only:
             # Keep the build's symbols for diagnostics; only strip APK copies.
             # The libraries go as xz streams, stored (no deflate on top), with

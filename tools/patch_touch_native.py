@@ -1206,6 +1206,11 @@ def patch_body_memory_counts(module, lang):
     a.member(frame + 7, 'makeAttachPoint')
     a.string(frame + 8, 'pt_zone')
     a.move(zone, frame + 9)
+    # The hero's points are pt_zone1..pt_zone21 for the zones 0..20 in both
+    # games, as the body's own render names them; "pt_zone0" is no point, and
+    # its null stopped the body screen once zone 0 was open.
+    a.integer(frame + 10, 1)
+    a.emit(36, frame + 9)
     a.emit(20, frame + 9)
     a.emit(36, frame + 8)
     a.native(frame + 6, 1)

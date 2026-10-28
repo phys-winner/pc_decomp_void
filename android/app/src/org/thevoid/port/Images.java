@@ -19,7 +19,7 @@ final class Images {
     /** The folder the game reads the images from (nativeStart's images). */
     static File dir(Context c, File base, String images) {
         File shared = new File(base, images);
-        if (new File(shared, "Game.exe").isFile()) return shared;
+        if (new File(shared, "Game.exe").isFile() && complete(c, images, shared)) return shared;
         File own = new File(c.getFilesDir(), images);
         try {
             install(c, images, own);
@@ -38,6 +38,25 @@ final class Images {
         } catch (IOException e) {
             return false;
         }
+    }
+
+    /** Whether a pushed folder has every image this APK carries: one pushed
+     *  before an image was added (d3dx9_36.dll, the shader compiler) would
+     *  hide it, so such a folder gives way to the APK's own copy. */
+    private static boolean complete(Context c, String images, File shared) {
+        String index;
+        try {
+            index = new String(read(c, images + "/index.txt"), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return true;   /* a build without images: the pushed folder is all there is */
+        }
+        for (String line : index.split("\n")) {
+            String name = line.trim().split(" ")[0];
+            if (name.isEmpty() || name.contains("/") || new File(shared, name).isFile()) continue;
+            android.util.Log.w("TheVoid", "images: " + shared + " lacks " + name + ", the APK's are used");
+            return false;
+        }
+        return true;
     }
 
     /* assets/<images>/index.txt: "name size sha256" a line; the copy notes

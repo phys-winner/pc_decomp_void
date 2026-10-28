@@ -63,6 +63,7 @@ final class ShaderCache {
 
     static void install(Context c, File appFiles, Progress progress) throws IOException {
         installWarmup(c, appFiles);
+        installPack(c, appFiles);
         File dir = new File(appFiles, "shadercache");
         String list = new String(read(c, "shadercache/index.txt"), StandardCharsets.UTF_8);
         java.util.List<String[]> names = new java.util.ArrayList<>();
@@ -152,6 +153,48 @@ final class ShaderCache {
             }
         }
         write(noted, (version + "\n" + stamp(dir, entries)).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** assets/shaderpack.bin, the pregenerated variants as one file (d3dx9.c
+     *  looks there when the cache folder has no answer; the menu's warm-up
+     *  leaves it alone): copied once, streamed and checked against
+     *  assets/shaderpack.txt ("size sha256"); the note spares the hash later. */
+    private static void installPack(Context c, File appFiles) throws IOException {
+        String expected;
+        try { expected = new String(read(c, "shaderpack.txt"), StandardCharsets.UTF_8).trim(); }
+        catch (java.io.FileNotFoundException legacy) { return; }
+        String[] meta = expected.split("\\s+");
+        if (meta.length != 2 || !meta[0].matches("[0-9]+") || !meta[1].matches("[0-9a-f]{64}"))
+            throw new IOException("invalid shader pack note: " + expected);
+        long size = Long.parseLong(meta[0]);
+        File pack = new File(appFiles, "shaderpack.bin"), noted = new File(appFiles, "shaderpack.txt");
+        if (pack.isFile() && pack.length() == size && noted.isFile()
+            && new String(readFile(noted), StandardCharsets.UTF_8).trim().equals(expected)) return;
+        File part = new File(pack.getPath() + ".part");
+        try {
+            java.security.MessageDigest sha;
+            try { sha = java.security.MessageDigest.getInstance("SHA-256"); }
+            catch (java.security.NoSuchAlgorithmException e) { throw new IOException(e); }
+            long copied = 0;
+            try (InputStream in = c.getAssets().open("shaderpack.bin"); FileOutputStream out = new FileOutputStream(part)) {
+                byte[] buf = new byte[1 << 16];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("shader pack copy cancelled");
+                    out.write(buf, 0, n);
+                    sha.update(buf, 0, n);
+                    copied += n;
+                }
+            }
+            StringBuilder hex = new StringBuilder();
+            for (byte b : sha.digest()) hex.append(String.format("%02x", b));
+            if (copied != size || !hex.toString().equals(meta[1])) throw new IOException("invalid bundled shader pack");
+            Files.move(part.toPath(), pack.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            part.delete();
+        }
+        write(noted, (expected + "\n").getBytes(StandardCharsets.UTF_8));
+        android.util.Log.i("TheVoid", "shader pack: " + size + " bytes installed");
     }
 
     private static boolean matches(File file, String[] entry) throws IOException {

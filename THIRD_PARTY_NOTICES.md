@@ -316,3 +316,57 @@ respective owners' terms. None is supplied by this source repository or
 relicensed by its GPL grant. Generated C, transformed executable images,
 patched game assets and native libraries containing original binary code are
 local build outputs and do not become wholly project-owned GPL source.
+
+## Arm ASTC Encoder 5.7.0 — Apache-2.0
+
+Source: https://github.com/ARM-software/astc-encoder
+
+Pinned submodule revision: `baff485b0ff36d2f95d28961605106502c653966`.
+
+Copyright 2011-2026 Arm Limited. The unmodified encoder library is used by the
+launcher's ASTC texture converter. Its complete Apache License 2.0 is included
+in the APK as `assets/licenses/astcenc.txt` and in the upstream submodule.
+
+## etcpak — BSD-3-Clause
+
+Source: https://github.com/wolfpld/etcpak
+
+Pinned submodule revision: `3d716e1550023dc5ff8b602636af8b76584e0b66`.
+
+The unmodified encoder sources are used by the launcher's ETC2 converter.
+The complete copyright notice and license are included in the APK as
+`assets/licenses/etcpak.txt` and in the upstream submodule.
+
+## bcdec 0.96 — Unlicense
+
+Source: https://github.com/iOrange/bcdec
+
+Bundled by the pinned etcpak submodule and included by its Decode.cpp.
+Distributed under the Unlicense alternative offered by the upstream header:
+
+```text
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org>
+```

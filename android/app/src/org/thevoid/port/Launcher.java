@@ -78,7 +78,17 @@ public final class Launcher extends Activity {
     private ProgressBar progress;
     private View progressBox, permissionBox, optionsBox, play, archiveButton, folderButton, stopButton;
     private TextView cleanupButton;
-    private FrameLayout skipBox;
+    private FrameLayout skipBox, fpsBox;
+    /* The chosen folder is a game folder the app can read: its textures can be converted. */
+    private boolean gameFolder;
+    /* Textures (Textures.java): the GPU's DXT support and the conversion. */
+    private View texBox, texProgressBox, texAstc, texEtc2, texRemove, texStop;
+    private TextView texInfo, texProgressText;
+    private ProgressBar texProgress;
+    private Textures.Status texStatus;
+    private Textures.Gpu texGpu;
+    private File texScanning;
+    private int texGeneration;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -101,9 +111,14 @@ public final class Launcher extends Activity {
         super.onResume();
         visible = true;
         UnpackService.cancelResult(this);
+        TextureService.cancelResult(this);
         if (Unpacker.current != null) {
             handler.removeCallbacks(watcher);
             handler.post(watcher);
+        }
+        if (Textures.current != null) {
+            handler.removeCallbacks(texWatcher);
+            handler.post(texWatcher);
         }
         if (prefs != null) refresh();
     }
@@ -115,6 +130,7 @@ public final class Launcher extends Activity {
 
     @Override protected void onDestroy() {
         handler.removeCallbacks(watcher);
+        handler.removeCallbacks(texWatcher);
         if (!isChangingConfigurations()) dropArchive();
         super.onDestroy();
     }
@@ -451,6 +467,132 @@ public final class Launcher extends Activity {
         }
     }
 
+    /* ------------------------------------------------------------ textures */
+
+    /** The GPU probe and the folder's texture status, off the main thread. */
+    private void refreshTextures() {
+        final File selected = storage() && gameFolder ? game : null;
+        if (selected == null) { texStatus = null; enable(); return; }
+        if (selected.equals(texScanning) || (Textures.current != null && !Textures.current.finished)) return;
+        final int request = ++texGeneration;
+        texScanning = selected;
+        new Thread(() -> {
+            Textures.Gpu gpu = Textures.gpu();
+            Textures.Status status = Textures.scan(selected);
+            handler.post(() -> {
+                if (isFinishing() || isDestroyed() || request != texGeneration) return;
+                texScanning = null;
+                texGpu = gpu;
+                texStatus = status;
+                enable();
+            });
+        }, "textures-scan").start();
+    }
+
+    private void showTextures(boolean idle) {
+        Textures.Job job = Textures.current;
+        boolean running = job != null && !job.finished;
+        Textures.Status st = texStatus;
+        texBox.setVisibility(game != null && gameFolder && (running || (st != null && texGpu != null)) ? View.VISIBLE : View.GONE);
+        texProgressBox.setVisibility(running ? View.VISIBLE : View.GONE);
+        boolean scanned = st != null && game != null && game.equals(st.game);
+        boolean native_ = texGpu != null && texGpu.s3tc;
+        StringBuilder info = new StringBuilder();
+        if (texGpu != null) {
+            info.append(fmt(T_TEX_GPU, texGpu.renderer.isEmpty() ? "?" : texGpu.renderer)).append(' ');
+            info.append(text(native_ ? T_TEX_NATIVE : T_TEX_NO_DXT));
+        }
+        if (scanned && st.failure != null) {
+            info.append("\n\n").append(text(st.failure.equals("libtexconv.so") ? T_TEX_UNAVAILABLE : T_TEX_UNREADABLE));
+        } else if (scanned) {
+            if (st.converted != 0) {
+                info.append("\n\n").append(fmt(T_TEX_CONVERTED, st.converted == Textures.ASTC ? "ASTC 4x4" : "ETC2",
+                    st.convertedTextures, size(st.convertedBytes)));
+                if (!st.current) info.append(' ').append(text(T_TEX_STALE));
+                else if (native_) info.append(' ').append(text(T_TEX_NOT_NEEDED));
+            } else if (texGpu != null && !native_ && st.textures > 0) {
+                info.append("\n\n").append(fmt(T_TEX_COUNT, st.textures, size(st.bytes),
+                    (texGpu.astc ? "ASTC " + size(st.estimateAstc) + ", " : "") + "ETC2 " + size(st.estimateEtc2), size(st.free)));
+            }
+        }
+        texInfo.setText(info);
+        boolean can = idle && !running && scanned && st.failure == null;
+        boolean offer = can && texGpu != null && !native_ && st.textures > 0;
+        texAstc.setVisibility(offer && texGpu.astc && !(st.converted == Textures.ASTC && st.current) ? View.VISIBLE : View.GONE);
+        texEtc2.setVisibility(offer && !(st.converted == Textures.ETC2 && st.current) ? View.VISIBLE : View.GONE);
+        texRemove.setVisibility(can && st.converted != 0 ? View.VISIBLE : View.GONE);
+        if (running) {
+            long[] p = job.progress();
+            texProgress.setIndeterminate(p[0] == Textures.SCANNING);
+            texProgress.setProgress((int) (p[3] * 1000 / Math.max(1, p[4])));
+            texProgressText.setText(p[0] == Textures.SCANNING ? text(T_TEX_SCANNING) : p[0] == Textures.FINISHING
+                ? text(T_TEX_FINISHING) : fmt(T_TEX_PROGRESS, p[1], p[2]) + " · " + progressText(p[3], p[4]));
+            setEnabled(texStop, !job.cancelled);
+        }
+    }
+
+    private void askConvert(int format) {
+        Textures.Status st = texStatus;
+        if (st == null || game == null || Unpacker.current != null || Textures.current != null && !Textures.current.finished) return;
+        long need = format == Textures.ASTC ? st.estimateAstc : st.estimateEtc2;
+        if (st.free >= 0 && st.free < need + (64L << 20)) {
+            error(fmt(T_TEX_SPACE, size(need), size(st.free)));
+            return;
+        }
+        final File target = game;
+        dialog().setTitle(text(T_TEX_TITLE))
+            .setMessage(fmt(T_TEX_ASK, st.textures, format == Textures.ASTC ? "ASTC 4x4" : "ETC2", size(need)))
+            .setPositiveButton(text(format == Textures.ASTC ? T_TEX_ASTC : T_TEX_ETC2), (d, w) -> startTextures(target, format))
+            .setNegativeButton(text(T_CANCEL), null)
+            .show();
+    }
+
+    private void askRemoveTextures() {
+        Textures.Status st = texStatus;
+        if (st == null || game == null || st.converted == 0) return;
+        final File target = game;
+        dialog().setMessage(fmt(T_TEX_REMOVE_ASK, size(st.convertedBytes)))
+            .setPositiveButton(text(T_DELETE), (d, w) -> startTextures(target, 0))
+            .setNegativeButton(text(T_CANCEL), null)
+            .show();
+    }
+
+    private void startTextures(File target, int format) {
+        if (Textures.start(this, target, format) == null) return;
+        android.util.Log.i("TheVoid", "launcher: textures " + (format == 0 ? "removed" : format == Textures.ASTC ? "to ASTC" : "to ETC2")
+            + " in " + target);
+        texStatus = null;
+        handler.removeCallbacks(texWatcher);
+        handler.post(texWatcher);
+        enable();
+    }
+
+    private void askStopTextures() {
+        Textures.Job job = Textures.current;
+        if (job == null || job.finished) return;
+        dialog().setMessage(text(T_TEX_STOP_ASK))
+            .setPositiveButton(text(T_STOP), (d, w) -> job.cancel())
+            .setNegativeButton(text(T_CONTINUE), null)
+            .show();
+    }
+
+    private final Runnable texWatcher = new Runnable() {
+        @Override public void run() {
+            Textures.Job job = Textures.current;
+            enable();
+            if (job == null) return;
+            if (!job.finished) { handler.postDelayed(this, 300); return; }
+            if (!visible) return;   /* TextureService told it; onResume takes it */
+            Textures.current = null;
+            TextureService.cancelResult(Launcher.this);
+            if (job.cancelled) note(text(T_TEX_STOPPED), false);
+            else if (job.failure != null) error(text(T_TEX_FAILED) + ": " + job.failure);
+            else if (job.format != 0) note(fmt(T_TEX_DONE_TIME, (System.currentTimeMillis() - job.started + 500) / 1000), false);
+            texScanning = null;
+            refreshTextures();
+        }
+    };
+
     private void refreshCleanup() {
         final File selected = storage() ? game : null;
         if (selected != null && selected.equals(cleanupScanning)) return;
@@ -742,9 +884,40 @@ public final class Launcher extends Activity {
         optionsBox = options;
         skipBox = new FrameLayout(this);
         options.addView(skipBox);
+        fpsBox = new FrameLayout(this);
+        options.addView(fpsBox);
         cleanupButton = button(text(T_CLEAN), false, this::scanCleanup);
         cleanupButton.setVisibility(View.GONE);
         options.addView(cleanupButton, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        LinearLayout tex = card(column);
+        texBox = tex;
+        tex.addView(heading(text(T_TEX_TITLE)));
+        texInfo = label("", 14, Color.WHITE);
+        tex.addView(texInfo);
+        texAstc = button(text(T_TEX_ASTC), false, () -> askConvert(Textures.ASTC));
+        texEtc2 = button(text(T_TEX_ETC2), false, () -> askConvert(Textures.ETC2));
+        texRemove = button(text(T_TEX_REMOVE), false, this::askRemoveTextures);
+        for (View b : new View[] {texAstc, texEtc2, texRemove}) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(46));
+            lp.setMargins(0, dp(8), 0, 0);
+            tex.addView(b, lp);
+        }
+        LinearLayout texRun = new LinearLayout(this);
+        texRun.setOrientation(LinearLayout.VERTICAL);
+        texProgressBox = texRun;
+        texProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        texProgress.setMax(1000);
+        texProgress.setProgressTintList(ColorStateList.valueOf(GOLD));
+        texRun.addView(texProgress, new LinearLayout.LayoutParams(-1, dp(18)));
+        texProgressText = label("", 14, Color.WHITE);
+        texRun.addView(texProgressText);
+        texStop = button(text(T_STOP), false, this::askStopTextures);
+        LinearLayout.LayoutParams texStopLp = new LinearLayout.LayoutParams(-1, dp(44));
+        texStopLp.setMargins(0, dp(8), 0, 0);
+        texRun.addView(texStop, texStopLp);
+        texRun.setVisibility(View.GONE);
+        tex.addView(texRun);
 
         LinearLayout permission = card(column);
         permissionBox = permission;
@@ -795,12 +968,18 @@ public final class Launcher extends Activity {
         skipBox.removeAllViews();
         skipBox.addView(toggle(Settings.text(Settings.T_SKIP_INTRO), files && skipIntro(), files,
             null, this::setSkipIntro));
+        gameFolder = files && game != null;
+        fpsBox.removeAllViews();
+        fpsBox.addView(fpsRow());
+        fpsBox.setVisibility(files && game != null ? View.VISIBLE : View.GONE);
         enable();
         refreshCleanup();
+        refreshTextures();
     }
 
     private void enable() {
-        boolean idle = Unpacker.current == null && busy == null, files = storage();
+        boolean idle = Unpacker.current == null && busy == null && (Textures.current == null || Textures.current.finished),
+            files = storage();
         setEnabled(archiveButton, idle && files);
         setEnabled(folderButton, idle && files);
         play.setVisibility(game != null ? View.VISIBLE : View.GONE);
@@ -811,6 +990,7 @@ public final class Launcher extends Activity {
         if (extras) cleanupButton.setText(text(T_CLEAN) + "  ·  " + size(cleanupPlan.bytes));
         setEnabled(cleanupButton, idle && extras);
         for (int i = 0; i < copies.getChildCount(); ++i) copies.getChildAt(i).setEnabled(idle);
+        showTextures(idle && files);
     }
 
     private static void setEnabled(View v, boolean on) {
@@ -903,6 +1083,47 @@ public final class Launcher extends Activity {
 
     private interface BoolSink { void set(boolean v); }
 
+    /** The frame limit: none (the display's fastest rate) or one of its slower
+     *  refresh rates (Settings.fpsLimit; GameActivity asks the display for it). */
+    private View fpsRow() {
+        int[] rates = Settings.refreshRates(getWindowManager().getDefaultDisplay());
+        int fastest = rates.length > 0 ? rates[0] : 60;
+        List<Integer> values = new ArrayList<>();
+        values.add(0);
+        for (int r : rates) if (r < fastest && r >= 30) values.add(r);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, dp(6));
+        LinearLayout words = new LinearLayout(this);
+        words.setOrientation(LinearLayout.VERTICAL);
+        words.addView(label(text(T_FPS), 15, Color.WHITE));
+        words.addView(label(text(T_FPS_WHY), 12, GREY));
+        row.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView value = label(fpsName(settings.fpsLimit, fastest), 15, GOLD);
+        value.setPadding(dp(10), 0, 0, 0);
+        row.addView(value);
+        row.setOnClickListener(v -> {
+            String[] names = new String[values.size()];
+            int checked = -1;
+            for (int i = 0; i < names.length; ++i) {
+                names[i] = fpsName(values.get(i), fastest);
+                if (values.get(i) == settings.fpsLimit) checked = i;
+            }
+            dialog().setTitle(text(T_FPS)).setSingleChoiceItems(names, checked, (d, which) -> {
+                settings.fpsLimit = values.get(which);
+                settings.save();
+                value.setText(fpsName(settings.fpsLimit, fastest));
+                android.util.Log.i("TheVoid", "launcher: frame limit " + settings.fpsLimit);
+                d.dismiss();
+            }).setNegativeButton(android.R.string.cancel, null).show();
+        });
+        return row;
+    }
+
+    private static String fpsName(int hz, int fastest) {
+        return hz > 0 && hz < fastest ? fmt(T_FPS_VALUE, hz) : fmt(T_FPS_NONE, fastest);
+    }
+
     /** A label and a drawn switch, as the layer's (the platform's is near invisible on black). */
     private View toggle(String text, boolean value, boolean enabled, String why, BoolSink sink) {
         LinearLayout row = new LinearLayout(this);
@@ -975,7 +1196,12 @@ public final class Launcher extends Activity {
         T_OK = 38, E_NOT_ZIP = 39, E_SPLIT = 40, E_NO_GAME = 41, E_NOT_VOID = 42, E_UNSAFE = 43, E_METHOD = 44,
         E_ENCRYPTED = 45, E_CORRUPT = 46, E_FULL = 47, E_READ_ONLY = 48, E_IO = 49, E_SPACE = 50, E_NO_PATH = 51,
         E_FOLDER = 52, E_FOLDER_NOT_VOID = 53, E_IMAGES = 54, E_LIBRARY = 55, E_NO_ARCHIVE = 56, T_HAS_GAME = 57,
-        T_CLEAN = 58, T_CLEAN_SCAN = 59, T_CLEAN_EMPTY = 60, T_CLEAN_PREVIEW = 61, T_CLEAN_BUSY = 62, T_CLEAN_DONE = 63;
+        T_CLEAN = 58, T_CLEAN_SCAN = 59, T_CLEAN_EMPTY = 60, T_CLEAN_PREVIEW = 61, T_CLEAN_BUSY = 62, T_CLEAN_DONE = 63,
+        T_TEX_TITLE = 64, T_TEX_GPU = 65, T_TEX_NATIVE = 66, T_TEX_NO_DXT = 67, T_TEX_COUNT = 68, T_TEX_CONVERTED = 69,
+        T_TEX_STALE = 70, T_TEX_ASTC = 71, T_TEX_ETC2 = 72, T_TEX_REMOVE = 73, T_TEX_CONVERTING = 74, T_TEX_PROGRESS = 75,
+        T_TEX_DONE = 76, T_TEX_FAILED = 77, T_TEX_STOPPED = 78, T_TEX_SPACE = 79, T_TEX_ASK = 80, T_TEX_SCANNING = 81,
+        T_TEX_UNAVAILABLE = 82, T_TEX_REMOVE_ASK = 83, T_TEX_NOT_NEEDED = 84, T_TEX_STOP_ASK = 85, T_TEX_FINISHING = 86,
+        T_TEX_DONE_TIME = 87, T_TEX_UNREADABLE = 88, T_FPS = 89, T_FPS_WHY = 90, T_FPS_NONE = 91, T_FPS_VALUE = 92;
     private static final String[][] TEXTS = {
         {"Game", "Игра", "Spiel", "Gra"},
         {"No game chosen yet", "Игра ещё не выбрана", "Noch kein Spiel gewählt", "Nie wybrano jeszcze gry"},
@@ -1107,6 +1333,69 @@ public final class Launcher extends Activity {
          "%1$s\nPlików: %2$d. Do odzyskania: %3$s.\nDane gry, zapisy, ustawienia i pamięci podręczne pozostają.\n\nUsunąć te pliki?\n"},
         {"Removing extra files…", "Удаление лишних файлов…", "Überflüssige Dateien werden entfernt…", "Usuwanie zbędnych plików…"},
         {"Freed: %s", "Освобождено: %s", "Freigegeben: %s", "Odzyskano: %s"},
+        {"Textures", "Текстуры", "Texturen", "Tekstury"},
+        {"Graphics: %s.", "Видеокарта: %s.", "Grafik: %s.", "Grafika: %s."},
+        {"It reads the game's DXT textures itself: they go to it as they are, nothing to convert.",
+         "Она сама читает текстуры игры в формате DXT — они идут в неё как есть, конвертировать ничего не нужно.",
+         "Sie liest die DXT-Texturen des Spiels selbst: sie gehen unverändert hinein, nichts zu konvertieren.",
+         "Sama czyta tekstury gry w formacie DXT — trafiają do niej bez zmian, nic nie trzeba konwertować."},
+        {"It does not read the game's DXT textures: they are unpacked while loading, taking 4–8 times the memory and "
+             + "slowing the picture. Convert them once into a format it reads itself.",
+         "Она не читает текстуры игры в формате DXT: при загрузке их приходится распаковывать — в 4–8 раз больше памяти "
+             + "и медленнее картинка. Сконвертируйте их один раз в формат, который видеокарта читает сама.",
+         "Sie liest die DXT-Texturen des Spiels nicht: sie werden beim Laden entpackt, brauchen 4–8-mal so viel Speicher "
+             + "und bremsen das Bild. Konvertieren Sie sie einmal in ein Format, das sie selbst liest.",
+         "Nie czyta tekstur gry w formacie DXT: przy wczytywaniu trzeba je rozpakowywać — 4–8 razy więcej pamięci "
+             + "i wolniejszy obraz. Przekonwertuj je raz do formatu, który karta czyta sama."},
+        {"Textures: %1$d (%2$s). The converted copy takes %3$s; free: %4$s. The originals stay.",
+         "Текстур: %1$d (%2$s). Сконвертированная копия займёт %3$s; свободно: %4$s. Оригиналы остаются.",
+         "Texturen: %1$d (%2$s). Die konvertierte Kopie braucht %3$s; frei: %4$s. Die Originale bleiben.",
+         "Tekstur: %1$d (%2$s). Przekonwertowana kopia zajmie %3$s; wolne: %4$s. Oryginały zostają."},
+        {"Converted to %1$s: %2$d textures, %3$s.", "Сконвертированы в %1$s. Текстур: %2$d, %3$s.",
+         "In %1$s konvertiert: %2$d Texturen, %3$s.", "Przekonwertowane do %1$s. Tekstur: %2$d, %3$s."},
+        {"It was made from other game files: convert again.", "Копия сделана из других файлов игры — сконвертируйте заново.",
+         "Sie stammt aus anderen Spieldateien: erneut konvertieren.", "Kopia powstała z innych plików gry — przekonwertuj ponownie."},
+        {"Convert to ASTC (better quality)", "Конвертировать в ASTC (качество выше)", "In ASTC konvertieren (bessere Qualität)",
+         "Konwertuj do ASTC (lepsza jakość)"},
+        {"Convert to ETC2 (faster)", "Конвертировать в ETC2 (быстрее)", "In ETC2 konvertieren (schneller)", "Konwertuj do ETC2 (szybciej)"},
+        {"Delete the converted textures", "Удалить сконвертированные текстуры", "Konvertierte Texturen löschen",
+         "Usuń przekonwertowane tekstury"},
+        {"Converting the textures", "Конвертация текстур", "Texturen werden konvertiert", "Konwersja tekstur"},
+        {"Texture %1$d of %2$d", "Текстура %1$d из %2$d", "Textur %1$d von %2$d", "Tekstura %1$d z %2$d"},
+        {"The textures are converted", "Текстуры сконвертированы", "Die Texturen sind konvertiert", "Tekstury przekonwertowane"},
+        {"Texture conversion failed", "Конвертация текстур не удалась", "Texturkonvertierung fehlgeschlagen",
+         "Konwersja tekstur nie powiodła się"},
+        {"Conversion stopped; nothing of it is left", "Конвертация прервана, от неё ничего не осталось",
+         "Konvertierung gestoppt; davon ist nichts übrig", "Konwersja przerwana; nic po niej nie zostało"},
+        {"Not enough space: %1$s needed, %2$s free.", "Не хватает места: нужно %1$s, свободно %2$s.",
+         "Nicht genug Platz: %1$s nötig, %2$s frei.", "Za mało miejsca: potrzeba %1$s, wolne %2$s."},
+        {"Convert %1$d textures to %2$s? It takes some minutes and %3$s on the storage; the game's own files stay as they are.",
+         "Сконвертировать текстуры в %2$s? Текстур: %1$d. Это займёт несколько минут и %3$s памяти; файлы игры не меняются.",
+         "%1$d Texturen in %2$s konvertieren? Das dauert einige Minuten und braucht %3$s Speicher; die Spieldateien bleiben.",
+         "Przekonwertować tekstury do %2$s? Tekstur: %1$d. To potrwa kilka minut i zajmie %3$s pamięci; pliki gry się nie zmieniają."},
+        {"Reading the textures…", "Читаю текстуры…", "Texturen werden gelesen…", "Czytam tekstury…"},
+        {"The converter is missing from this APK.", "В этом APK нет конвертера текстур.", "Dieser APK fehlt der Texturkonverter.",
+         "W tym APK brakuje konwertera tekstur."},
+        {"Delete the converted textures (%s)? The game then unpacks the DXT textures again while loading.",
+         "Удалить сконвертированные текстуры (%s)? Игра снова будет распаковывать DXT при загрузке.",
+         "Die konvertierten Texturen (%s) löschen? Das Spiel entpackt die DXT-Texturen dann wieder beim Laden.",
+         "Usunąć przekonwertowane tekstury (%s)? Gra znów będzie rozpakowywać DXT przy wczytywaniu."},
+        {"(Not needed on this phone.)", "(На этом телефоне не нужна.)", "(Auf diesem Telefon nicht nötig.)",
+         "(Na tym telefonie niepotrzebna.)"},
+        {"Stop converting? What is converted so far is removed.", "Прервать конвертацию? Уже сконвертированное будет удалено.",
+         "Konvertierung stoppen? Bereits Konvertiertes wird gelöscht.", "Przerwać konwersję? To, co już przekonwertowano, zostanie usunięte."},
+        {"Writing the index…", "Записываю индекс…", "Der Index wird geschrieben…", "Zapisuję indeks…"},
+        {"The textures are converted in %d s", "Текстуры сконвертированы за %d с", "Die Texturen sind in %d s konvertiert",
+         "Tekstury przekonwertowano w %d s"},
+        {"The game's textures could not be read.", "Не удалось прочитать текстуры игры.", "Die Texturen des Spiels sind nicht lesbar.",
+         "Nie udało się odczytać tekstur gry."},
+        {"Frame rate limit", "Ограничение FPS", "Bildratenbegrenzung", "Limit klatek na sekundę"},
+        {"The display's own refresh rates. A lower limit keeps the phone cooler and the battery longer.",
+         "Частоты обновления этого дисплея. Чем ниже предел, тем меньше греется телефон и дольше живёт батарея.",
+         "Die Bildwiederholraten dieses Displays. Eine niedrigere Grenze hält das Telefon kühler und den Akku länger.",
+         "Częstotliwości odświeżania tego ekranu. Niższy limit to chłodniejszy telefon i dłuższa praca baterii."},
+        {"None (%d Hz)", "Нет (%d Гц)", "Keine (%d Hz)", "Brak (%d Hz)"},
+        {"%d FPS", "%d FPS", "%d FPS", "%d FPS"},
     };
 
     static String text(int id) {
