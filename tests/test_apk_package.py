@@ -43,8 +43,8 @@ def main():
     manifest = ET.parse(ROOT / "android/app/AndroidManifest.xml").getroot()
     ns = "{http://schemas.android.com/apk/res/android}"
     version, code = manifest.get(ns + "versionName"), manifest.get(ns + "versionCode")
-    minor = re.fullmatch(r"0\.(\d+)-dev", version)
-    assert minor and int(code) == int(minor[1]) + 1, "development version/code sequence"
+    assert re.fullmatch(r"0\.\d+(?:\.\d+)?-dev", version), "development version format"
+    assert re.fullmatch(r"[1-9]\d*", code), "positive Android version code"
     badging = run(TOOLS / "aapt2.exe", "dump", "badging", path).stdout
     assert f"versionCode='{code}'" in badging and f"versionName='{version}'" in badging
     assert "minSdkVersion:'26'" in badging

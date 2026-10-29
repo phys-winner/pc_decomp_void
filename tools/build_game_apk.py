@@ -272,6 +272,8 @@ def main():
         # Its encoders' licenses go with their binary form (Apache-2.0, BSD-3-Clause).
         apk.write(ROOT / "reference/astcenc/LICENSE.txt", "assets/licenses/astcenc.txt")
         apk.write(ROOT / "reference/etcpak/LICENSE.txt", "assets/licenses/etcpak.txt")
+        apk.write(ROOT / "LICENSE", "assets/licenses/GPL-3.0.txt")
+        apk.write(ROOT / "THIRD_PARTY_NOTICES.md", "assets/licenses/THIRD_PARTY_NOTICES.md")
         if not args.java_only:
             # Keep the build's symbols for diagnostics; only strip APK copies.
             # The libraries go as xz streams, stored (no deflate on top), with

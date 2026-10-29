@@ -129,84 +129,16 @@ void RENDERER_SCENE_PASS(void)
  * [ESP+8] the effect's ID, a CEffectIDB with its text at +4, [ESP+12] a flag;
  * ret, AL whether it built) splits the effect's lights into passes,
  * generating and compiling the HLSL of each split it tries (sub_161F8460)
- * until one compiles; when none does it logs the effect's whole text, and its
- * caller asks again in the next frame. With the compile service running a
- * variant the cache lacks goes there (d3dx9.c): the builder's other tries and
- * the dump fail at once, and while the service works on it the next frames'
- * builds of the same effect are not run at all. EAX/ECX/EDX are the callers'
- * to lose. */
+ * until one compiles. Both releases cache partial passes even when AL is
+ * false, so every build must finish before returning to its caller. */
 #if defined(RENDERER_PASS_BUILD) && defined(RENDERER_PASS_SPLIT) && defined(ENGINE_LOG_LINE)
 void RENDERER_PASS_BUILD_LIFTED(void);
 void RENDERER_PASS_SPLIT_LIFTED(void);
-void void_d3dx_async_begin(uint32_t esp);
-uint64_t void_d3dx_async_end(void);
 int void_d3dx_async_aborted(void);
-int void_d3dx_async_waiting(uint64_t key);
-
-#define WAITING_EFFECTS 256u
-static struct { uint64_t effect, variant; } waiting_effects[WAITING_EFFECTS];
-static uint32_t waiting_next;
-
-/* A frame in which a build has left a variant to the service already waits
- * for something: its builds stop after BUILD_BUDGET_NS of building, the rest
- * are asked for again in the next frames (a scene the caches do not cover
- * comes in over some frames instead of in one frame of seconds). Frames
- * without such a miss build everything as before. */
-#define BUILD_BUDGET_NS 8000000ull
-static uint32_t budget_frame;
-static uint64_t budget_spent;
-static int budget_waiting;
-
-static uint64_t effect_identity(uint32_t generation, uint32_t strategy, uint32_t idb, uint32_t flag)
-{
-    uint64_t h = 0xCBF29CE484222325ull;
-    const uint8_t *text = GPTR(idb + 4);
-    for (uint32_t i = 0; i < 516u && text[i]; ++i) h = (h ^ text[i]) * 0x100000001B3ull;
-    uint32_t words[7] = { strategy, flag, MEM32(generation + 40), MEM32(generation + 44), MEM32(generation + 48),
-        MEM32(generation + 52), MEM32(generation + 56) };
-    const uint8_t *w = (const uint8_t *)words;
-    for (size_t i = 0; i < sizeof words; ++i) h = (h ^ w[i]) * 0x100000001B3ull;
-    return h;
-}
 
 void RENDERER_PASS_BUILD(void)
 {
-    uint32_t stack = g_esp, generation = g_ecx;
-    if (!void_vm_readable(stack, 16) || !void_vm_readable(generation, 60)) { RENDERER_PASS_BUILD_LIFTED(); return; }
-    uint32_t strategy = MEM32(stack + 4), idb = MEM32(stack + 8), flag = MEM8(stack + 12);
-    if (!void_vm_readable(idb, 520)) { RENDERER_PASS_BUILD_LIFTED(); return; }
-    uint64_t effect = effect_identity(generation, strategy, idb, flag);
-    for (uint32_t i = 0; i < WAITING_EFFECTS; ++i) {
-        if (!waiting_effects[i].variant || waiting_effects[i].effect != effect) continue;
-        if (void_d3dx_async_waiting(waiting_effects[i].variant)) {
-            g_eax = 0;
-            g_esp = stack + 4u;   /* ret */
-            return;
-        }
-        waiting_effects[i].variant = 0;   /* answered, or the service gone: built as usual */
-    }
-    uint32_t frame = void_frames_presented();
-    if (frame != budget_frame) {
-        budget_frame = frame;
-        budget_spent = 0;
-        budget_waiting = 0;
-    }
-    if (budget_waiting && budget_spent >= BUILD_BUDGET_NS) {
-        g_eax = 0;
-        g_esp = stack + 4u;   /* ret: built in a later frame */
-        return;
-    }
-    uint64_t t0 = void_monotonic_ns();
-    void_d3dx_async_begin(stack);
     RENDERER_PASS_BUILD_LIFTED();
-    uint64_t variant = void_d3dx_async_end();
-    budget_spent += void_monotonic_ns() - t0;
-    if (variant) budget_waiting = 1;
-    if (variant && !(g_eax & 255u)) {
-        waiting_effects[waiting_next].effect = effect;
-        waiting_effects[waiting_next].variant = variant;
-        waiting_next = (waiting_next + 1u) % WAITING_EFFECTS;
-    }
 }
 
 /* Engine's log line (the log's vtable+12, sub_1110BF90; ECX the log, [ESP+4]

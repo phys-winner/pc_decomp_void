@@ -1,14 +1,16 @@
 # pc_decomp_void
 
-## Version 0.3-dev
+## Version 0.3.1-dev
 
-Missing shader variants compile in a separate process on small CPU cores, with
-private learned caches, a pregenerated shader pack and additional GL warm-up recipes.
-The launcher can convert textures to ASTC 4x4 or ETC2, report GPU support and control FPS.
-This release also adds adaptive physics timing, x4 anisotropy defaults, water-reflection
-controls, region-lighting caching, body-screen/map-picture fixes and corresponding
-Tension improvements. See [CHANGELOG.md](CHANGELOG.md) for the complete release notes
-and [TECHDEBT-2008.md](TECHDEBT-2008.md) for remaining Tension work.
+Fixed a crash when breaking a rock in Bastion with a cold shader cache, reported
+on cycle 8. Both The Void 2009 and Tension 2008 now finish building shader passes
+before the renderer consumes their output. Shader caches remain available;
+compiling a new variant can briefly pause a frame.
+
+The 2009 fix was checked on a Pixel 10a with cold and learned caches. Tension
+has regression coverage but has not been tested on a device. APK version code 5
+preserves the existing update signing key. See [CHANGELOG.md](CHANGELOG.md) for
+release notes and [TECHDEBT-2008.md](TECHDEBT-2008.md) for remaining Tension work.
 
 The texture encoders are pinned upstream Git submodules: ASTC Encoder 5.7.0
 (`baff485b0ff36d2f95d28961605106502c653966`) and etcpak

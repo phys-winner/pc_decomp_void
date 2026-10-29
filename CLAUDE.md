@@ -103,10 +103,11 @@ input fails with FileNotFoundError, which is an environment gap, not a regressio
   `build/shadercache/pregen-results`, the script's `shaderwarm` pregenerator), or the on-device compile
   (lifted d3dx9_36, byte-identical to fxc; both games save results in the app's private
   `files/shaderlearned/<hash>.bin`, looked up first; `no-device-compile` / `no-bundle` files switch it).
-  A variant missing inside the pass builder (`sub_161FCEC0` in 2009, renderer_native.c) goes to
-  `ShaderCompilerService` (process `:shaders` with the game's own library, small cores, page
-  `files/shaderservice`, requests `files/shaderrequests`) and the build fails until it answers;
-  `no-compile-service` turns that off. GL program recipes: `build/shaderwarm`
+  Both pass builders (`sub_161FCEC0` in 2009, `sub_161FCA20` in Tension, renderer_native.c)
+  finish synchronously: their callers can cache partial passes even when AL reports failure,
+  so deferring a missing shader to another frame can crash dynamic lighting. The compiler
+  service (process `:shaders`, page `files/shaderservice`, requests `files/shaderrequests`)
+  still handles background disassembly; `no-compile-service` turns it off. GL program recipes: `build/shaderwarm`
   (`tools/merge_shader_recipes.py` merges phones' `files/shaderwarm`).
 - **Textures**: Adreno 6xx has no S3TC; DXT is decoded to RGBA8 at load unless the launcher converted the
   game's textures into `<game>/data/port-textures.tvt` (ETC2 or ASTC, `android/texconv`, format in `tvtx.h`).

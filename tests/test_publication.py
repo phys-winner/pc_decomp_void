@@ -57,8 +57,8 @@ def main():
         assert not Path(value).is_absolute() and ".." not in Path(value).parts, value
     manifest = ET.parse(ROOT / "android/app/AndroidManifest.xml").getroot()
     ns = "{http://schemas.android.com/apk/res/android}"
-    minor = re.fullmatch(r"0\.(\d+)-dev", manifest.get(ns + "versionName"))
-    assert minor and int(manifest.get(ns + "versionCode")) == int(minor[1]) + 1
+    assert re.fullmatch(r"0\.\d+(?:\.\d+)?-dev", manifest.get(ns + "versionName"))
+    assert re.fullmatch(r"[1-9]\d*", manifest.get(ns + "versionCode"))
     scene = "girl/test.xml"
     world = b"\x01A\0" + struct.pack("<I", 1) + b"\x011" + bytes([len(scene)]) + scene.encode("utf-16le")
     with patch.object(generate_debug_levels, "read_entry", return_value=world) as read:
