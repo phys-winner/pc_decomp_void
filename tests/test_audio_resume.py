@@ -36,11 +36,31 @@ def main():
                            env=env, capture_output=True, text=True)
     (out / "build.log").write_text(built.stdout + built.stderr)
     assert built.returncode == 0, built.stdout + built.stderr
-    with tempfile.TemporaryDirectory(prefix="profile-", dir=out) as profile:
-        tested = subprocess.run([str(exe), profile], capture_output=True, text=True)
-    (out / "run.log").write_text(tested.stdout + tested.stderr)
-    assert tested.returncode == 0, tested.stdout + tested.stderr
-    print(tested.stdout, end="")
+    logs = []
+    for symbols in range(4):
+        with tempfile.TemporaryDirectory(prefix="profile-", dir=out) as profile:
+            tested = subprocess.run([str(exe), profile, str(symbols)], capture_output=True, text=True)
+        logs.append(tested.stdout + tested.stderr)
+        (out / "run.log").write_text("".join(logs))
+        assert tested.returncode == 0, tested.stdout + tested.stderr
+        print(tested.stdout, end="")
+    api26 = out / "api26.c"
+    api26.write_text("""#define _GNU_SOURCE
+#include <aaudio/AAudio.h>
+#include <dlfcn.h>
+#include <pthread.h>
+#include <math.h>
+#include <stdint.h>
+#include <unistd.h>
+static _Atomic int audio_paused;
+static void void_log(const char *fmt, ...) { (void)fmt; }
+""" + audio)
+    linked = subprocess.run([str(CLANG), "--target=aarch64-linux-android26", "-O2", "-std=c11", "-shared", "-fPIC",
+                             "-Wl,--no-undefined", str(api26), "-laaudio", "-ldl", "-lm", "-pthread",
+                             "-o", str(out / "api26.so")], capture_output=True, text=True)
+    (out / "api26.log").write_text(linked.stdout + linked.stderr)
+    assert linked.returncode == 0, linked.stdout + linked.stderr
+    print("PASS: production AAudio backend compiles and links with API 26 stubs and no undefined symbols")
 
 
 if __name__ == "__main__":

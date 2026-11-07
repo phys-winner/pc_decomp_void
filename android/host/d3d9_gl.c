@@ -151,6 +151,7 @@ int d3d_gl_init(void)
      * VOID_NO_S3TC=1 decodes them all the same (comparisons). */
     GLint extensions = 0;
     glGetIntegerv(GL_NUM_EXTENSIONS, &extensions);
+    d3d_gl_limits.max_anisotropy = 1.0f;
     int dxt1 = 0, dxt3 = 0, dxt5 = 0;
     for (GLint i = 0; i < extensions; ++i) {
         const char *e = (const char *)glGetStringi(GL_EXTENSIONS, (GLuint)i);
@@ -160,11 +161,13 @@ int d3d_gl_init(void)
         else if (!strcmp(e, "GL_ANGLE_texture_compression_dxt3")) dxt3 = 1;
         else if (!strcmp(e, "GL_ANGLE_texture_compression_dxt5")) dxt5 = 1;
         else if (!strcmp(e, "GL_KHR_texture_compression_astc_ldr")) d3d_gl_caps.astc = 1;
+        else if (!strcmp(e, "GL_EXT_texture_filter_anisotropic"))
+            glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &d3d_gl_limits.max_anisotropy);
     }
     const char *no_s3tc = getenv("VOID_NO_S3TC");
     d3d_gl_caps.s3tc = dxt1 && dxt3 && dxt5 && !(no_s3tc && *no_s3tc == '1');
-    void_log("[gl] block textures: DXT %s, ASTC %s, ETC2 yes", d3d_gl_caps.s3tc ? "sampled as they are" : "decoded",
-        d3d_gl_caps.astc ? "yes" : "no");
+    void_log("[gl] block textures: DXT %s, ASTC %s, ETC2 yes, anisotropy %g", d3d_gl_caps.s3tc ? "sampled as they are" : "decoded",
+        d3d_gl_caps.astc ? "yes" : "no", d3d_gl_limits.max_anisotropy);
     const char *dump = getenv("VOID_DUMP_FRAMES");
     dump_every = dump ? atoi(dump) : 0;
     const char *trace = getenv("VOID_TRACE_FRAME");
@@ -634,9 +637,11 @@ static GLuint sampler_for(const uint32_t *ss, int no_filter, uint32_t levels, ui
     else if (mip == 1) minf = linear ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST;
     else minf = linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR;
     glSamplerParameteri(s, GL_TEXTURE_MIN_FILTER, (GLint)minf);
-    float aniso = (min == 3 || mag == 3) ? (float)(key[7] ? key[7] : 1) : 1.0f;
-    if (aniso > 16.0f) aniso = 16.0f;
-    glSamplerParameterf(s, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+    if (d3d_gl_limits.max_anisotropy > 1.0f) {
+        float aniso = (min == 3 || mag == 3) ? (float)(key[7] ? key[7] : 1) : 1.0f;
+        if (aniso > d3d_gl_limits.max_anisotropy) aniso = d3d_gl_limits.max_anisotropy;
+        glSamplerParameterf(s, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+    }
     glSamplerParameterf(s, GL_TEXTURE_MIN_LOD, (float)key[8]);
     if (sampler_count < 512) {
         memcpy(sampler_cache[sampler_count].key, key, sizeof key);
@@ -847,6 +852,77 @@ int d3d_shader_bind2(d3d_device *dev, d3d_shader *vs, d3d_shader *ps, int (*bgra
 void d3d_shader_upload(d3d_device *dev, float half_x, float half_y, int alpha_func, float alpha_ref);
 
 static GLuint up_vbo, up_ibo;
+
+/* UP draws (DrawPrimitiveUP/DrawIndexedPrimitiveUP) go to one persistently mapped buffer
+ * (GL_EXT_buffer_storage): RING_SEGMENTS segments, one per frame in flight, each reused only
+ * after the fence of the frame that last wrote it. A glBufferData per draw made the Adreno
+ * driver allocate and free GPU memory with an ioctl each (UT3 2026-11-04: a third of the
+ * frame's CPU time in the kernel). A frame that outgrows its segment uploads the old way. */
+#define RING_SEGMENTS 3u
+#define RING_SEGMENT_BYTES (8u << 20)
+static GLuint ring_buffer;
+static uint8_t *ring_map;
+static uint32_t ring_segment, ring_used;
+static GLsync ring_fence[RING_SEGMENTS];
+static int ring_state;                   /* 0 untried, 1 mapped, -1 unavailable */
+
+static int ring_ready(void)
+{
+    if (ring_state) return ring_state > 0;
+    ring_state = -1;
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    if (!extensions || !strstr(extensions, "GL_EXT_buffer_storage") || getenv("VOID_NO_RING")) return 0;
+    PFNGLBUFFERSTORAGEEXTPROC storage = (PFNGLBUFFERSTORAGEEXTPROC)eglGetProcAddress("glBufferStorageEXT");
+    if (!storage) return 0;
+    GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT;
+    GLsizeiptr bytes = (GLsizeiptr)RING_SEGMENTS * RING_SEGMENT_BYTES;
+    glGenBuffers(1, &ring_buffer);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, ring_buffer);
+    storage(GL_COPY_WRITE_BUFFER, bytes, NULL, flags);
+    ring_map = (uint8_t *)glMapBufferRange(GL_COPY_WRITE_BUFFER, 0, bytes, flags);
+    if (!ring_map) {
+        void_log("[gl] streaming ring unavailable (%04X)", glGetError());
+        glDeleteBuffers(1, &ring_buffer);
+        ring_buffer = 0;
+        return 0;
+    }
+    ring_segment = ring_used = 0;
+    ring_state = 1;
+    void_log("[gl] streaming ring: %u x %u MiB", RING_SEGMENTS, RING_SEGMENT_BYTES >> 20);
+    return 1;
+}
+
+/* Room for `bytes` in this frame's segment, 16-byte aligned, or NULL. */
+static uint8_t *ring_alloc(uint32_t bytes, uint32_t *offset)
+{
+    if (!bytes || !ring_ready()) return NULL;
+    uint32_t at = (ring_used + 15u) & ~15u;
+    if ((uint64_t)at + bytes > RING_SEGMENT_BYTES) return NULL;
+    ring_used = at + bytes;
+    *offset = ring_segment * RING_SEGMENT_BYTES + at;
+    return ring_map + *offset;
+}
+
+/* After a frame's last draw: fence its segment, move to the next one and wait
+ * for the GPU to finish the frame that used it RING_SEGMENTS frames ago. */
+static void ring_frame_end(void)
+{
+    if (ring_state <= 0) return;
+    if (ring_fence[ring_segment]) glDeleteSync(ring_fence[ring_segment]);
+    ring_fence[ring_segment] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    ring_segment = (ring_segment + 1u) % RING_SEGMENTS;
+    ring_used = 0;
+    GLsync fence = ring_fence[ring_segment];
+    if (!fence) return;
+    for (int waits = 0;; ++waits) {
+        GLenum result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
+        if (result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED) break;
+        if (result == GL_WAIT_FAILED) { void_log("[gl] streaming ring fence wait failed %04X", glGetError()); break; }
+        if (waits < 3) void_log("[gl] streaming ring: GPU still on segment %u after %d s", ring_segment, waits + 1);
+    }
+    glDeleteSync(fence);
+    ring_fence[ring_segment] = 0;
+}
 static uint32_t enabled_attribs;
 
 static GLenum gl_mode(uint32_t p)
@@ -955,7 +1031,8 @@ int d3d_gl_draw(d3d_device *d, uint32_t primitive, uint32_t start_vertex, uint32
     if ((hud & (HUD_CURSOR | HUD_CURSOR_LYMPHA)) && void_hud_cursor_hidden()) return 1;
     for (int s = 0; s < 4; ++s) if (vs_samplers & (1u << s)) bind_texture(d, 16 + s, (GLuint)(16 + s), 0, 0);
     /* UP data */
-    uint32_t up_bytes = 0;
+    uint32_t up_bytes = 0, up_ring_at = 0;
+    GLuint up_buffer = 0;
     if (up_vertices) {
         uint32_t vertices = vertex_count;
         if (indexed && up_indices) {
@@ -967,9 +1044,20 @@ int d3d_gl_draw(d3d_device *d, uint32_t primitive, uint32_t start_vertex, uint32
             vertices = max + 1;
         }
         up_bytes = vertices * up_stride;
-        if (!up_vbo) glGenBuffers(1, &up_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, up_vbo);
-        glBufferData(GL_ARRAY_BUFFER, up_bytes, up_vertices, GL_STREAM_DRAW);
+        /* UP data through the streaming ring: a glBufferData per draw made the Adreno driver
+         * allocate (and later free) GPU memory with an ioctl each, a third of the frame's CPU
+         * time in kernel calls on sprite- and particle-heavy scenes (UT3, 2026-11-04). */
+        uint8_t *dst = ring_alloc(up_bytes, &up_ring_at);
+        if (dst) {
+            memcpy(dst, up_vertices, up_bytes);
+            up_buffer = ring_buffer;
+        } else {
+            up_ring_at = 0;
+            if (!up_vbo) glGenBuffers(1, &up_vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, up_vbo);
+            glBufferData(GL_ARRAY_BUFFER, up_bytes, up_vertices, GL_STREAM_DRAW);
+            up_buffer = up_vbo;
+        }
     }
     uint32_t instances = (d->st.stream_freq[0] & 0x40000000u) ? (d->st.stream_freq[0] & 0x3FFFFFFFu) : 0;
     uint32_t want = 0;
@@ -989,8 +1077,8 @@ int d3d_gl_draw(d3d_device *d, uint32_t primitive, uint32_t start_vertex, uint32
         GLsizei stride;
         GLuint buffer;
         if (up_vertices && e->stream == 0) {
-            buffer = up_vbo;
-            offset = e->offset;
+            buffer = up_buffer;
+            offset = (uintptr_t)up_ring_at + e->offset;
             stride = (GLsizei)up_stride;
         } else {
             d3d_buffer *b = (d3d_buffer *)d->st.streams[e->stream];
@@ -1144,11 +1232,19 @@ int d3d_gl_draw(d3d_device *d, uint32_t primitive, uint32_t start_vertex, uint32
     GLenum mode = gl_mode(primitive);
     if (indexed) {
         if (up_indices) {
-            if (!up_ibo) glGenBuffers(1, &up_ibo);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, up_ibo);
-            elem_buffer = up_ibo;
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, vertex_count * (up_index32 ? 4u : 2u), up_indices, GL_STREAM_DRAW);
-            glDrawElements(mode, (GLsizei)vertex_count, up_index32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, NULL);
+            uint32_t index_bytes = vertex_count * (up_index32 ? 4u : 2u), index_at = 0;
+            uint8_t *dst = ring_alloc(index_bytes, &index_at);
+            GLuint element = ring_buffer;
+            if (dst) memcpy(dst, up_indices, index_bytes);
+            else {
+                index_at = 0;
+                if (!up_ibo) glGenBuffers(1, &up_ibo);
+                element = up_ibo;
+            }
+            if (elem_buffer != element) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element); elem_buffer = element; }
+            if (!dst) glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_bytes, up_indices, GL_STREAM_DRAW);
+            glDrawElements(mode, (GLsizei)vertex_count, up_index32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
+                           (const void *)(uintptr_t)index_at);
         } else {
             d3d_buffer *ib = (d3d_buffer *)d->st.indices;
             if (!ib) { void_log("[gl] indexed draw without an index buffer"); return 0; }
@@ -1473,6 +1569,7 @@ void d3d_gl_present(d3d_device *dev)
 #ifndef VOID_ANDROID_APP
     if (void_shader_warming) return;
 #endif
+    ring_frame_end();
     if (camera_frames) {
         void_log("[camera] frame %u at %.2f ms: %.4f %.4f %.4f %.4f%s", dev->frame, (double)void_monotonic_ns() / 1e6,
             camera_w[0], camera_w[1], camera_w[2], camera_w[3], camera_taken ? "" : " (no 3D draw)");

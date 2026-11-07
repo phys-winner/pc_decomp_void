@@ -32,6 +32,11 @@ def main():
     assert "static/CompositeObscureOle/ps_3_0" in obscura and "static/DownsampleObscureOleAG/ps_3_0" in obscura
     for shader, request_data in obscura.values():
         (requests / (shader + ".req")).write_bytes(request_data)
+    tension = {name: (shader, data) for name, shader, data in shaders("research/vfs-index.polish.json")}
+    for name in ("DownsampleSister", "DownsampleSisterAG", "CompositeSister"):
+        assert "static/" + name + "/ps_3_0" in tension
+    for shader, request_data in tension.values():
+        (requests / (shader + ".req")).write_bytes(request_data)
     bad_keys = ["truncated-macros", "truncated-source"]
     (requests / (bad_keys[0] + ".req")).write_bytes(
         b"function=main\nprofile=ps_3_0\nflags=0\ninclude=no\nmacros=99999\nx")
@@ -42,6 +47,8 @@ def main():
         assert (results / (variants["startup/position/" + profile][0] + ".bin")).stat().st_size > 4
     for name, (shader, _) in obscura.items():
         assert (results / (shader + ".bin")).stat().st_size > 4, name
+    for name, (shader, _) in tension.items():
+        assert (results / (shader + ".bin")).stat().st_size > 4, "Tension " + name
     assert "truncated macros" in run.stderr and "truncated source" in run.stderr, run.stderr
     assert not any((results / (key + suffix)).exists() for key in bad_keys for suffix in (".bin", ".err"))
 
@@ -60,7 +67,8 @@ def main():
                     str(ROOT / "tests/shaderwarm_probe.c"), "/Fe" + str(out / "probe.exe"),
                     "/Fo" + str(out / "probe.obj")], env=env, check=True, capture_output=True)
     subprocess.run([str(out / "probe.exe")], check=True)
-    print(f"PASS: {len(variants)} variants; all {len(obscura)} sister compositor/downsample variants; truncated requests rejected; original pregeneration ABI")
+    print(f"PASS: {len(variants)} 2009 variants; all {len(obscura)} sister compositor/downsample variants; "
+          f"all {len(tension)} Tension variants; truncated requests rejected; original pregeneration ABI")
 
 
 if __name__ == "__main__":

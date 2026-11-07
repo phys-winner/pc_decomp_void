@@ -892,7 +892,7 @@ COM_METHOD(buf, Lock, 5)
     d3d_buffer *b = BUF;
     uint32_t offset = ARG(1), size = ARG(2), out = ARG(3), flags = ARG(4);
     if (offset > b->size) return D3DERR_INVALIDCALL;
-    if (!size || offset + size > b->size) size = b->size - offset;
+    if (!size || size > b->size - offset) size = b->size - offset;
     if (!(flags & D3DLOCK_READONLY)) {
         if (offset < b->dirty_lo) b->dirty_lo = offset;
         if (offset + size > b->dirty_hi) b->dirty_hi = offset + size;
@@ -1068,21 +1068,21 @@ COM_METHOD(qry, Issue, 2)
 COM_METHOD(qry, GetData, 4)
 {
     d3d_query *q = QRY;
-    uint32_t out = ARG(1), size = ARG(2);
+    uint32_t out = ARG(1), size = ARG(2), flags = ARG(3);
     if (q->type == 4) {
         if (out && size >= 16) { MEM32(out) = FOURCC('C','A','C','H'); MEM32(out + 4) = 1; MEM32(out + 8) = 16; MEM32(out + 12) = 7; }
         return D3D_OK;
     }
     if (q->type == 8) {
         if (q->fence) {
-            GLenum r = glClientWaitSync(q->fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+            GLenum r = glClientWaitSync(q->fence, (flags & 1u) ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, 0);
             if (r == GL_TIMEOUT_EXPIRED) return S_FALSE_D3D;
+            if (r == GL_WAIT_FAILED) return 0x88760868u; /* D3DERR_DEVICELOST */
         }
         if (out && size >= 4) MEM32(out) = 1;
         return D3D_OK;
     }
     if (!q->ended) { if (out && size >= 4) MEM32(out) = 0; return D3D_OK; }
-    uint32_t flags = ARG(3);
     /* D3DGETDATA_FLUSH submits pending work; it does not wait for the result. */
     if (flags & 1u) glFlush();
     GLuint available = 0;

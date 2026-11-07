@@ -31,6 +31,7 @@ def elf(data):
     phsize, count = struct.unpack_from("<HH", data, 54)
     for i in range(count):
         p = struct.unpack_from("<IIQQQQQQ", data, phoff + i * phsize)
+        assert p[0] != 7, "ELF TLS requires Android 29; APK supports Android 26"
         if p[0] == 1:
             assert p[7] >= 16384 and p[2] % 16384 == p[3] % 16384, "LOAD alignment"
     return sections
@@ -59,6 +60,8 @@ def main():
         cached = {line.split()[0] for line in apk.read("assets/shadercache/index.txt").decode().splitlines() if line.strip()}
         for label, key, _ in shaders():
             assert key + ".bin" in cached, "missing required shader: " + label + " (" + key + ")"
+        for label, key, _ in shaders("research/vfs-index.polish.json"):
+            assert key + ".bin" in cached, "missing required Tension shader: " + label + " (" + key + ")"
         libraries = {"libvoid.so": "arm64", "libvoid_tension.so": "arm64-tension"}
         # lib/ holds the unpacker and the texture converter; the game libraries are xz streams in assets/native.
         assert {n for n in names if n.startswith("lib/")} == {"lib/arm64-v8a/libvoidxz.so", "lib/arm64-v8a/libtexconv.so"}
@@ -99,6 +102,12 @@ def main():
             assert (len(unpacked), hashlib.sha256(unpacked).hexdigest()) == index[name], "unpacked " + name
             original = elf((ROOT / "build" / folder / name).read_bytes())
             shipped = elf(unpacked)
+            strings = shipped[".dynstr"][2]
+            for symbol in struct.iter_unpack("<IBBHQQ", shipped[".dynsym"][2]):
+                symbol_name = strings[symbol[0]:].split(b"\0", 1)[0]
+                assert symbol[3] or not symbol_name.startswith(b"sub_"), "undefined guest function: " + symbol_name.decode()
+            for symbol in (b"AAudioStreamBuilder_setUsage", b"AAudioStreamBuilder_setContentType"):
+                assert symbol not in shipped[".dynstr"][2], "API 28 audio attributes must load dynamically: " + name
             assert ".symtab" not in shipped and ".strtab" not in shipped, name
             assert not any(s.startswith(".debug") for s in shipped), name
             allocated = lambda sections: {n: s for n, s in sections.items() if s[0][1] & 2}
@@ -133,10 +142,23 @@ def main():
             for line in apk.read(prefix + "index.txt").decode().splitlines():
                 name, size, digest, *alias = line.split()
                 target = alias[0] if alias else name
-                content = apk.read(prefix + target)
+                if folder.startswith("lifted") and alias:
+                    if target.startswith("game:"):
+                        assert folder == "lifted-tension" and name in ("Game.exe", "GameModule.dll"), line
+                        assert target == "game:bin/win32/" + name, line
+                        assert prefix + name not in names, "original image still bundled"
+                        with zipfile.ZipFile(ROOT / "pub/the-void-2008-polish.zip") as original:
+                            content = original.read(target[5:])
+                    else:
+                        assert target == "apk:lifted/d3dx9_36.dll" and name == "d3dx9_36.dll", line
+                        assert prefix + name not in names, "shared compiler still duplicated"
+                        content = apk.read("assets/" + target[4:])
+                else:
+                    content = apk.read(prefix + target)
                 assert len(content) == int(size) and hashlib.sha256(content).hexdigest() == digest, name
                 assert folder != "shadercache" or user_folder not in content, ("a user folder in a shader answer", name)
-                expected.add(prefix + target)
+                if not (folder.startswith("lifted") and alias):
+                    expected.add(prefix + target)
                 checked += 1
             assert {n for n in names if n.startswith(prefix)} == expected, folder
         for file in (ROOT / "build/overrides").rglob("*"):

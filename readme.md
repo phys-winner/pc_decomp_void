@@ -1,16 +1,30 @@
 # pc_decomp_void
 
-## Version 0.3.1-dev
+## Version 0.4-dev
 
-Fixed a crash when breaking a rock in Bastion with a cold shader cache, reported
-on cycle 8. Both The Void 2009 and Tension 2008 now finish building shader passes
-before the renderer consumes their output. Shader caches remain available;
-compiling a new variant can briefly pause a frame.
+Development release of The Void 2009 and Tension 2008, including all changes
+since 0.3.1-dev. APK versionCode 7 preserves the existing update signing key.
 
-The 2009 fix was checked on a Pixel 10a with cold and learned caches. Tension
-has regression coverage but has not been tested on a device. APK version code 5
-preserves the existing update signing key. See [CHANGELOG.md](CHANGELOG.md) for
-release notes and [TECHDEBT-2008.md](TECHDEBT-2008.md) for remaining Tension work.
+- The Void 2009 developer commands have eight localized, alphabetically sorted
+  categories, with manual command entry last.
+- Checked x87 FNSAVE/FRSTOR images preserve control/status words and exact integer
+  shadows in The Void 2009. The model still uses double arithmetic with integer
+  shadows; full 80-bit arithmetic and historical FIP/FDP/FOP are not implemented.
+- Both games include correct EVENT query flags/error handling, FSINCOS order,
+  bounded driver caches, safe buffer locks and guest virtual-memory validation.
+- Tension includes the camera/prologue repair, expanded shader preparation,
+  native Theora paths and its own PGO profile. Short menu taps and Body/Back
+  handling are repaired; full-precision shader operations use highp.
+- Smaller image packaging shares the D3DX compiler image. Tension obtains its
+  original Game.exe and GameModule.dll from the user's Polish 2008 distribution
+  and validates size/SHA-256. Keep its complete bin/win32 folder when importing.
+
+Both native libraries and the full APK package passed validation. Earlier
+hardware smoke checks cover both games; no new device run, complete campaign,
+full save/load acceptance or measured FPS gain is claimed for this publication.
+The new command categories and x87 state support remain disabled for Tension;
+transfers 23 and 24 are tracked in [TECHDEBT-2008.md](TECHDEBT-2008.md).
+See [CHANGELOG.md](CHANGELOG.md) for the full changes.
 
 The texture encoders are pinned upstream Git submodules: ASTC Encoder 5.7.0
 (`baff485b0ff36d2f95d28961605106502c653966`) and etcpak
@@ -36,7 +50,7 @@ rights holders. Game names and original content belong to their respective owner
 
 ## Status
 
-Current version: **0.3-dev** (`versionCode=4`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
+Current version: **0.4-dev** (`versionCode=7`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
 sideloading, signed with a local development key.
 
 - Original x86 game logic is translated ahead of time with
@@ -76,10 +90,10 @@ installed.
 | Android Platform Tools | Optional, for ADB deployment |
 | Visual Studio C++ tools | x86 compiler and Windows SDK, for the shader-cache helper |
 | XZ Utils | 5.4 or newer; `XZ`, `PATH` or the Git for Windows copy |
-| Target device | ARM64, OpenGL ES 3.2; Android 11/API 30 or newer recommended |
+| Target device | ARM64, OpenGL ES 3.2; Android 8.0/API 26 or newer |
 
-The manifest declares API 26 as the minimum and API 28 as the target; native
-code is currently compiled for API 30. Older Android versions are unverified.
+The manifest declares API 26 as the minimum and API 28 as the target. Native
+code is compiled for API 26, with optional newer audio APIs loaded dynamically.
 Allow several gigabytes for the games and substantially more for generated C,
 object files and native libraries. The default native build uses 12 compiler jobs.
 
@@ -202,7 +216,7 @@ Keep all signing keys out of version control.
    the game data you intend to run.
 
 The APK is written to **`build/android-game/the-void.apk`**. A complete build
-also writes **`pub/the-void-0.3-dev-<sha256-prefix>.apk`**. The eight-character
+also writes **`pub/the-void-0.4-dev-<sha256-prefix>.apk`**. The eight-character
 suffix is the first eight hexadecimal characters of the signed APK's SHA-256.
 
 To limit native compilation parallelism, build first and package those libraries:
@@ -273,9 +287,9 @@ not contact a phone. No device identifier belongs in tracked configuration.
 
 ## Versioning and checks
 
-Versions follow `0.1-dev`, `0.3-dev`, `0.3-dev`, and so on, with Android version
-codes `2`, `3`, `4`, respectively (`versionCode = minor + 1`). The source of
-truth is `android/app/AndroidManifest.xml`. Rebuilding does not bump the version.
+Versions follow `0.<minor>[.<patch>]-dev`; the Android versionCode increases
+for each release. The current version is 0.4-dev with versionCode 7. The source
+of truth is `android/app/AndroidManifest.xml`. Rebuilding does not bump the version.
 
 ```powershell
 python -B tests/test_publication.py

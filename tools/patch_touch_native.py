@@ -59,9 +59,13 @@ def patch_player(module, lang):
     r = rows(module)
     fov = method(module, 'getCameraFOV')
     assert module.code[fov + 4:fov + 8] == p32(1)
+    fov_load = next(x for x in r if x['offset'] == fov + 8)
+    assert fov_load['opcode'] == 14 and fov_load['operands'] == [0]
+    fov_global = fov_load['register']
+    assert 0 <= fov_global < len(module.types) and module.types[fov_global] == 2
     module.code[fov + 4:fov + 8] = p32(5)
     a = Assembler(module)
-    a.emit(14, 35, 0)
+    a.emit(14, fov_global, 0)
     a.get_setting('PortFOV', 1, 'asFloat')
     a.integer(2, 55)
     a.emit(39, 1)

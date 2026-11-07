@@ -1439,7 +1439,7 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
 
     /** Android's Back: puts the brush down, otherwise the game's Escape. */
     void escape() {
-        if (touchAdaptations() && (hud & HUD_BACK) != 0) {
+        if (screen != S_BODY && touchAdaptations() && (hud & HUD_BACK) != 0) {
             setPaintMode(false);
             touch.cancel();
             int at = SLOT_BACK * PalettePicker.FLOATS + 64;
@@ -2376,7 +2376,6 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
         private float twoDownX, twoDownY;   /* where the second finger landed */
         private int dragButton = Input.LEFT;
         private float dragScale;
-        private Runnable clickDown, clickUp;
         private boolean pouring, pourPressed, memoryPour;
         private void beginPour() {
             if (pouring) return;
@@ -2521,8 +2520,7 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
             dragging = listScroll = false;
             if (strokePress != null) { removeCallbacks(strokePress); strokePress = null; strokeId = -1; }
             if (strokeId >= 0) { strokeId = -1; in.button(Input.LEFT, false); }
-            if (clickDown != null) { removeCallbacks(clickDown); clickDown.run(); }
-            if (clickUp != null) { removeCallbacks(clickUp); clickUp.run(); }
+            in.cancelClicks();
             lookId = uiId = uiId2 = -1;
             uiFingers = 0;
             uiId3 = -1;
@@ -3237,7 +3235,6 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
                 bodyTarget = -1;
                 if (screen == S_BODY) resetBodyTransferColour();
                 scrollRest = 0;
-                finishClick();
                 in.cursorTo(uiDownX / w, uiDownY / h);   /* hover first, as a mouse arrives */
                 if (beginSubtitle(uiDownX, uiDownY)) {
                     /* The long hold repeats Enter while the subtitle is on screen. */
@@ -3459,18 +3456,8 @@ final class Controls extends FrameLayout implements Choreographer.FrameCallback,
             lastTapTime = time;
             lastTapX = x;
             lastTapY = y;
-            finishClick();
-            in.cursorTo(x / getWidth(), y / getHeight());
-            clickDown = () -> { GameActivity.nativeMouseButton(Input.LEFT, true); clickDown = null; };
-            clickUp = () -> { GameActivity.nativeMouseButton(Input.LEFT, false); clickUp = null; };
-            postDelayed(clickDown, 50);
-            postDelayed(clickUp, 120);
-        }
-
-        /** A quick second tap first finishes the first click. */
-        private void finishClick() {
-            if (clickDown != null) { removeCallbacks(clickDown); clickDown.run(); }
-            if (clickUp != null) { removeCallbacks(clickUp); clickUp.run(); }
+            final float fx = x / getWidth(), fy = y / getHeight();
+            in.click(Input.LEFT, () -> in.cursorTo(fx, fy));
         }
 
         /* PAINT: the cursor goes under the finger without mouse motion (that

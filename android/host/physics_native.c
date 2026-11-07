@@ -24,9 +24,7 @@ void ENGINE_DEBUG_VECTOR(void)
 }
 #endif
 
-/* The guards of PhysX 2.8.1's leaves the 2009 build runs with local x87 state
- * (tools/build_android.py localize_fpu; TECHDEBT-2008.md). */
-#ifndef VOID_RELEASE
+/* The build enables these guards only for checked release-specific bodies. */
 /* Extreme values and aliases need the original NaN conversion/store behavior. */
 int void_physics_sweep_finite(void)
 {
@@ -81,8 +79,6 @@ int void_physics_worker_pair_finite(void)
     }
     return 1;
 }
-
-#endif
 
 #ifdef PHYSX_DEBUG_LINE
 void PHYSX_DEBUG_LINE_LIFTED(void);

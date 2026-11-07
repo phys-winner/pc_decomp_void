@@ -2,6 +2,8 @@ package org.thevoid.port;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -22,6 +24,15 @@ final class Input {
     private final Map<Integer, Integer> buttonRefs = new HashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private float restX, restY;   /* fractions of a pixel of relative motion not sent yet */
+    private static final class MouseClick {
+        final int code;
+        final Runnable hover;
+        MouseClick(int code, Runnable hover) { this.code = code; this.hover = hover; }
+    }
+    private final ArrayDeque<MouseClick> clicks = new ArrayDeque<>();
+    private boolean clickPressed;
+    private long clickFrame, clickTime;
+    private final Runnable clickStep = this::advanceClick;
 
     void key(int code, boolean down) {
         int before = keyRefs.getOrDefault(code, 0), after = Math.max(0, before + (down ? 1 : -1));
@@ -41,11 +52,48 @@ final class Input {
         if ((before == 0) != (after == 0)) GameActivity.nativeMouseButton(code, down);
     }
 
-    /** A click as a mouse makes it: the press a frame after the cursor
-     *  arrived (menus highlight on motion), held a few frames. */
-    void click(int code) {
-        handler.postDelayed(() -> button(code, true), 50);
-        handler.postDelayed(() -> button(code, false), 140);
+    /** Hover first, then keep Down through a complete input-polling frame. */
+    void click(int code) { click(code, null); }
+
+    void click(int code, Runnable hover) {
+        clicks.addLast(new MouseClick(code, hover));
+        if (clicks.size() == 1) startClick();
+    }
+
+    private void startClick() {
+        MouseClick click = clicks.peekFirst();
+        if (click.hover != null) click.hover.run();
+        handler.postDelayed(clickStep, 50);
+    }
+
+    private void advanceClick() {
+        MouseClick click = clicks.peekFirst();
+        if (click == null) return;
+        if (!clickPressed) {
+            button(click.code, true);
+            clickPressed = true;
+            clickFrame = GameActivity.nativeHudState() >>> 32;
+            clickTime = SystemClock.uptimeMillis();
+            handler.postDelayed(clickStep, 90);
+        } else {
+            long frames = ((GameActivity.nativeHudState() >>> 32) - clickFrame) & 0xffffffffL;
+            // One Present can finish a frame that polled before Down arrived.
+            if (frames < 2 && SystemClock.uptimeMillis() - clickTime < 600) {
+                handler.postDelayed(clickStep, 10);
+                return;
+            }
+            button(click.code, false);
+            clickPressed = false;
+            clicks.removeFirst();
+            if (!clicks.isEmpty()) startClick();
+        }
+    }
+
+    void cancelClicks() {
+        handler.removeCallbacks(clickStep);
+        if (clickPressed) button(clicks.peekFirst().code, false);
+        clicks.clear();
+        clickPressed = false;
     }
 
     boolean held(int code) { return buttonRefs.containsKey(code); }
@@ -72,6 +120,7 @@ final class Input {
     void movement(float x, float y) { GameActivity.nativeMovement(x, y); }
 
     void releaseAll() {
+        cancelClicks();
         handler.removeCallbacksAndMessages(null);
         for (Integer code : keyRefs.keySet().toArray(new Integer[0])) GameActivity.nativeKey(code, false);
         for (Integer code : buttonRefs.keySet().toArray(new Integer[0])) GameActivity.nativeMouseButton(code, false);

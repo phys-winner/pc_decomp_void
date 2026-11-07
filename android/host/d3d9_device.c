@@ -32,10 +32,12 @@ static void fill_caps(uint32_t out)
     uint32_t tex = d3d_gl_limits.max_texture ? d3d_gl_limits.max_texture : 8192;
     uint32_t vol = d3d_gl_limits.max_3d_texture ? d3d_gl_limits.max_3d_texture : 2048;
     uint32_t rts = d3d_gl_limits.max_draw_buffers ? d3d_gl_limits.max_draw_buffers : 4;
+    uint32_t aniso = d3d_gl_limits.max_anisotropy > 0.0f ? (uint32_t)d3d_gl_limits.max_anisotropy : 16;
     if (MEM32(out + 88) > tex) MEM32(out + 88) = tex;      /* MaxTextureWidth */
     if (MEM32(out + 92) > tex) MEM32(out + 92) = tex;      /* MaxTextureHeight */
     if (MEM32(out + 96) > vol) MEM32(out + 96) = vol;      /* MaxVolumeExtent */
     if (MEM32(out + 104) > tex) MEM32(out + 104) = tex;    /* MaxTextureAspectRatio */
+    if (MEM32(out + 108) > aniso) MEM32(out + 108) = aniso; /* MaxAnisotropy */
     if (MEM32(out + 260) > rts) MEM32(out + 260) = rts;    /* NumSimultaneousRTs */
 }
 

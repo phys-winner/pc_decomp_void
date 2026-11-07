@@ -49,7 +49,7 @@ def main():
                             for sse in ((False,True) if local else (False,))]:
         combined=localize_sse(body) if sse else body
         original=oracle_prefix+combined.decode().replace('void sub_160902D0(void)','void original_particle(void)',1)+oracle_suffix
-        fast=localize_fpu(combined).decode();assert 'double l_st[8]' in fast and 'void_renderer_particle_finite()' in fast
+        fast=localize_fpu(combined).decode();assert 'double l_st[8]' in fast and 'void_renderer_particle_finite(0x' in fast
         source=out/('probe-reg%d-sse%d-plain%d.c'%(local,sse,plain))
         source.write_text(fixture.replace('/* DECLARATIONS */',declarations).replace('/* GUARD */',guard)
             .replace('/* ORIGINALS */',original).replace('/* LOCALIZED */',fast).replace('/* SNAPSHOTS */',snapshots),encoding='utf-8')

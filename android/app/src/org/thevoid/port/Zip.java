@@ -146,7 +146,7 @@ final class Zip implements Closeable {
             }
             if (startDisk != 0) throw new Unpacker.Failure(Unpacker.SPLIT, null);
             if (packed < 0 || full < 0 || header < 0) throw notZip();
-            String name = unicode != null ? unicode : decode(raw, (flags & 0x800) != 0);
+            String name = unicode != null ? unicode : decode(raw, (flags & 0x800) != 0, d.get(p + 5) & 0xFF);
             list.add(new Entry(name.replace('\\', '/'), method, flags, crc, packed, full, header + shift));
             p = next;
         }
@@ -165,15 +165,35 @@ final class Zip implements Closeable {
         }
     }
 
-    static String decode(byte[] raw, boolean utf8) {
+    // shortcut: unlabeled OEM names prefer CP866 letters; revisit if CP437 names conflict.
+    /** host: the "made by" system; Windows archivers (MS-DOS/FAT 0, NTFS 11, VFAT 14) write the OEM
+     *  code page, where Cyrillic CP866 bytes can also happen to form valid UTF-8. */
+    static String decode(byte[] raw, boolean utf8, int host) {
         if (utf8) return new String(raw, StandardCharsets.UTF_8);
+        String cyrillic = cp866(raw);
+        if (cyrillic != null && (host == 0 || host == 11 || host == 14)) return cyrillic;
         try {
             return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(raw)).toString();
         } catch (CharacterCodingException e) {
-            return new String(raw, DOS);
+            return cyrillic != null ? cyrillic : new String(raw, DOS);
         }
     }
+
+    /** A name whose every byte above ASCII is a CP866 letter (А–я, Ё/ё, Є/є, Ї/ї, Ў/ў), else null. */
+    static String cp866(byte[] raw) {
+        StringBuilder out = new StringBuilder(raw.length);
+        for (byte b : raw) {
+            int c = b & 0xFF;
+            if (c < 0x80) out.append((char) c);
+            else if (c <= 0xAF) out.append((char) (0x0410 + c - 0x80));
+            else if (c >= 0xE0 && c <= 0xEF) out.append((char) (0x0440 + c - 0xE0));
+            else if (c >= 0xF0 && c <= 0xF7) out.append("ЁёЄєЇїЎў".charAt(c - 0xF0));
+            else return null;
+        }
+        return out.toString();
+    }
+
 
     static String methodName(int method) {
         switch (method) {

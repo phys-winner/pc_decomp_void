@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -24,6 +25,16 @@ array = java.split("COMMANDS = {", 1)[1].split("};", 1)[0]
 commands = [json.loads('"' + text + '"').split()[0].lstrip("/") for text in re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', array)]
 assert len(commands) == len(set(commands)), "duplicate commands"
 assert set(commands) == original_commands | {"setvar", "getvar", "setting", "save_settings", "broadcast", "string", "gamma"}
+for index in ("research/vfs-index.json", "research/vfs-index.polish.json"):
+    rows = method_rows(Module(read_entry(index, "Scripts\\world\\world.bin"), legacy="polish" in index), "onConsoleCommand")
+    body = ET.fromstring(read_entry(index, "Properties\\World\\body.xml"))
+    assert {row.get("Name") for row in body if row.get("Name", "").startswith("Zone")} == {f"Zone{i}" for i in range(21)}
+    assert any(row.get("text") == "Usage: /open_zone [zone]  (opens random zone if zone is undefined)" for row in rows)
+    assert any(row.get("text") == "Error: chapter must be a number [0-6]" for row in rows)
+    start = next(i for i, row in enumerate(rows) if row.get("text") == "surface_exit")
+    end = rows[start + 2]["operands"][0]
+    surface = [row for row in rows[start:] if row["offset"] < end]
+    assert {row["operands"][0] for row in surface if row["opcode"] == 1 and row["register"] == 3} == {0, 1, 2, 255}
 print(f"{len(original_commands)} original script commands, 7 native commands and 26 selectable map locations PASS")
 
 JAVA = Path(os.environ.get("JAVA_HOME", "")) / "bin"

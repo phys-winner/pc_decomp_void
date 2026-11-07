@@ -17,6 +17,15 @@ typedef int atomic_int;
 #define atomic_load(p) (*(p))
 #define atomic_store(p, value) (*(p) = (value))
 #define mkdir(path, mode) _mkdir(path)
+
+#define S_ISREG(mode) (((mode) & _S_IFMT) == _S_IFREG)
+__declspec(dllimport) unsigned long __stdcall GetFileAttributesA(const char *path);
+static int lstat(const char *path, struct stat *st)
+{
+    int result = stat(path, st);
+    if (!result && (GetFileAttributesA(path) & 0x400u)) st->st_mode &= ~_S_IFMT;
+    return result;
+}
 typedef unsigned GLuint;
 typedef unsigned GLenum;
 typedef int GLint;
@@ -108,6 +117,18 @@ static void put(const char *dir, const char *name, const void *bytes, size_t siz
     FILE *f = fopen(path, "wb"); assert(f && fwrite(bytes, 1, size, f) == size && !fclose(f));
 }
 
+static void put_recipe(const char *dir, const char *pixel, char name[32])
+{
+    const char vertex[] = "#version 300 es\nprecision highp float;\nvoid main() {}\n";
+    size_t size = sizeof(recipe_header) + sizeof vertex + strlen(pixel) + 1;
+    recipe_header *h = calloc(1, size);
+    h->magic = RECIPE_MAGIC; h->vertex_size = sizeof vertex; h->pixel_size = (uint32_t)strlen(pixel) + 1; h->count = 1;
+    strcpy(h->names[0], "vs_v0"); memcpy(h + 1, vertex, sizeof vertex);
+    strcpy((char *)(h + 1) + sizeof vertex, pixel);
+    assert(valid_recipe(h, size)); snprintf(name, 32, "%016llx.bin", (unsigned long long)warm_hash(h, size));
+    put(dir, name, h, size); free(h);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -161,6 +182,22 @@ int main(int argc, char **argv)
         char *vertex = (char *)(h + 1), end = vertex[h->vertex_size - 1]; vertex[h->vertex_size - 1] = 'x'; assert(!valid_recipe(h, e->size)); vertex[h->vertex_size - 1] = end;
     }
     assert(!valid_recipe("tiny", 4));
+    /* An update leaves old learned recipes on disk; skip obsolete Mojo only. */
+    char migration[1200], old_name[32], new_name[32], ff_name[32], old_path[1300];
+    snprintf(migration, sizeof migration, "%s/migration", argv[1]); assert(!_mkdir(migration));
+    put_recipe(migration, "#version 300 es\n#define texture2D texture\nprecision mediump float;\nvec4 ps_r0;\nvoid main() {}\n", old_name);
+    put_recipe(migration, "#version 300 es\n#define texture2D texture\nprecision highp float;\nvec4 ps_r0;\nvoid main() {}\n", new_name);
+    put_recipe(migration, "#version 300 es\nprecision mediump float;\nvec4 ff_color;\nvoid main() {}\n", ff_name);
+    uint32_t before = queued; scan_directory(migration, 1); assert(queued == before + 2);
+    unsigned modern = 0, ff = 0;
+    for (warm_entry *e = queue; e; e = e->next) {
+        const recipe_header *h = e->bytes; const char *pixel = (const char *)(h + 1) + h->vertex_size;
+        assert(e->recipe && valid_recipe(e->bytes, e->size));
+        modern += strstr(pixel, "precision highp float;") != NULL; ff += strstr(pixel, "ff_color") != NULL;
+    }
+    assert(modern == 1 && ff == 1); scan_directory(migration, 1); assert(queued == before + 2);
+    snprintf(old_path, sizeof old_path, "%s/%s", migration, old_name); assert(!access(old_path, F_OK));
+    puts("PASS: old mediump Mojo skipped, current highp and legacy FF retained, learned files untouched");
     puts("PASS: exact GPU-stage reuse, unique stages, real recipe replay/reuse, one uniform owner, bounded corrupt input, measured main-menu completion, kept program binaries (loaded, refused, another driver)");
     return 0;
 }

@@ -45,7 +45,14 @@ typedef unsigned GLuint;
 #define GL_FRAGMENT_SHADER 1
 #define GL_VERTEX_SHADER 2
 #define FOURCC(a,b,c,d) ((uint32_t)(a)|((uint32_t)(b)<<8)|((uint32_t)(c)<<16)|((uint32_t)(d)<<24))
-static GLuint compile(unsigned type, const char *source) { assert(type && source && *source); return 1; }
+static GLuint compile(unsigned type, const char *source) {
+    assert(type && source && *source);
+    if (type == GL_FRAGMENT_SHADER) {
+        assert(strstr(source, "precision highp float;"));
+        assert(!strstr(source, "precision mediump float;"));
+    }
+    return 1;
+}
 static void void_log(const char *format, ...) { va_list args; va_start(args, format); vfprintf(stderr, format, args); fputc('\n', stderr); va_end(args); }
 #include "translate.h"
 int main(int argc, char **argv) {

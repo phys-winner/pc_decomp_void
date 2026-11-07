@@ -489,15 +489,44 @@ def source_transfer_release(lang, index):
     assert not any(m['name'] == 'onActiveLimfa' for c in module.contexts for m in c['methods']), "2009 hearts cannot feed the Palette"
 
 
-def fov_and_stats():
-    player = Module(read_asset('Scripts\\player.bin')[0])
-    patch_player(player, 'ru')
+def player_fov():
     class Value:
         def __init__(self, value): self.asFloat = float(value)
-    for selected in (40, 55, 70, 100):
-        vm = VM(player, {35: 55}, {'Settings': {'PortFOV': Value(selected)}})
-        _, regs = vm.run(method(player, 'getCameraFOV'))
-        assert math.isclose(regs[-4], selected)
+    for lang, index in (('ru', 'research/vfs-index.json'),
+                        ('de', 'research/vfs-index.german.json'),
+                        ('pl', 'research/vfs-index.polish.json')):
+        original = Module(read_entry(index, 'Scripts\\player.bin'), legacy=lang == 'pl')
+        code = list(original.instructions())
+        start = method(original, 'getCameraFOV')
+        load = next(x for x in code if x['offset'] == start + 8)
+        field = load['register']
+        assert (load['opcode'], load['operands'], field) == (14, [0], 34 if lang == 'pl' else 35)
+        # Use the actual radians initializer, including the original attention
+        # zoom, rather than supplying the selected degrees as the old test did.
+        store = next(i for i, x in enumerate(code) if x.get('opcode') == 13 and x['operands'] == [field])
+        initializer = code[store - 1]
+        assert initializer['opcode'] == 2 and initializer['register'] == code[store]['register']
+        initial = struct.unpack('<f', struct.pack('<I', initializer['operands'][0]))[0]
+        assert math.isclose(initial, .957962691783905)
+        player = Module(original.encode(), legacy=original.legacy)
+        patch_player(player, lang)
+        brush = patch_brush_live(player, lang)
+        # In Tension the appended selected-colour cache is global35. A hardcoded
+        # 2009 FOV field made the camera angle become that colour (0..6 radians).
+        cache = brush['brush_cache_global']
+        assert cache != field
+        for current in (initial, initial * .65):
+            _, baseline = VM(original, {field: current}).run(start)
+            for selected in (40, 55, 70, 100):
+                for colour in (0, 3, 6):
+                    state = {field: current, cache: colour}
+                    vm = VM(player, state, {'Settings': {'PortFOV': Value(selected)}})
+                    _, regs = vm.run(start)
+                    assert math.isclose(regs[-4], baseline[-4] * selected / 55)
+                    assert state == {field: current, cache: colour}
+
+
+def fov_and_stats():
     wheel = Module(read_asset('Scripts\\ui\\body_wheel.bin')[0])
     info = patch_stats(wheel, 'ru')
     start = method(wheel, 'updateTooltip')
@@ -854,6 +883,7 @@ if __name__ == '__main__':
     source_transfer()
     memory_colour_event()
     paint_colour_widget()
+    player_fov()
     fov_and_stats()
     published_counts()
     mobile_body_details()

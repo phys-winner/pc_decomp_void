@@ -24,6 +24,50 @@ public final class DebugCommandsTest {
         assert DebugLevels.RU.length == 26 && DebugLevels.DE.length == 26;
         for (boolean legacy : new boolean[] {false, true}) {
             Settings.legacyGame = legacy;
+            for (String language : new String[] {"English", "Russian", "German", "Polish"}) {
+                Settings.gameLanguage = language;
+                java.util.HashSet<String> names = new java.util.HashSet<>();
+                for (String usage : DebugCommands.commands()) {
+                    String name = DebugCommands.commandName(usage);
+                    assert !name.isEmpty() && !name.equals(usage) : usage;
+                    assert names.add(name) : "duplicate command label: " + name;
+                    assert DebugCommands.commandHelp(usage).startsWith(usage + "\n") : usage;
+                }
+                String[] categories = DebugCommands.categoryChoices();
+                assert categories.length == 9 : "eight categories and manual entry";
+                java.text.Collator alphabet = java.text.Collator.getInstance(new java.util.Locale(
+                    language.equals("Russian") ? "ru" : language.equals("German") ? "de" : language.equals("Polish") ? "pl" : "en"));
+                java.util.HashSet<String> grouped = new java.util.HashSet<>();
+                for (int i = 0; i < categories.length - 1; ++i) {
+                    if (i > 0) assert alphabet.compare(categories[i - 1], categories[i]) < 0 : categories[i];
+                    String[] commands = DebugCommands.commandsInCategory(categories[i]);
+                    assert commands.length > 0 : categories[i];
+                    for (int j = 0; j < commands.length; ++j) {
+                        assert grouped.add(commands[j]) : "command in multiple categories: " + commands[j];
+                        if (j > 0) assert alphabet.compare(DebugCommands.commandName(commands[j - 1]),
+                            DebugCommands.commandName(commands[j])) <= 0 : commands[j];
+                    }
+                }
+                assert grouped.equals(new java.util.HashSet<>(java.util.Arrays.asList(DebugCommands.commands())))
+                    : "every available command must appear exactly once";
+                assert DebugCommands.commandsInCategory(categories[categories.length - 1]).length == 0 : "manual entry is last";
+                if (language.equals("Russian")) {
+                    assert categories[0].equals("Братья");
+                    assert categories[categories.length - 2].equals("Сюжет и время");
+                    assert categories[categories.length - 1].equals("Ввод команды");
+                    assert DebugCommands.commandsInCategory("Сохранения")[0].equals("/load save_name");
+                    assert DebugCommands.commandsInCategory("Сохранения")[1].equals("/save save_name");
+                }
+            }
+            Settings.gameLanguage = "ru";
+            assert DebugCommands.commandName("/open_zone [zone]").equals("Открыть сердца");
+            assert DebugCommands.commandHelp("/open_zone [zone]").contains("0–20 (21 сердце)");
+            assert DebugCommands.commandHelp("/open_zone [zone]").contains("случайное");
+            assert java.util.Arrays.asList(DebugCommands.commands()).contains(DebugCommands.PHYSICS_COMMAND);
+            Settings.gameLanguage = "Russian";
+            assert Settings.text(Settings.T_REFLECTIONS).equals("Отражения");
+            Settings.gameLanguage = "English";
+            assert Settings.text(Settings.T_REFLECTIONS).equals("Reflections");
             int normal = DebugCommands.levelIds().length;
             String[] extra = DebugCommands.extraLabels();
             assert extra.length == (legacy ? 50 : 43);
@@ -71,6 +115,7 @@ public final class DebugCommandsTest {
         java.util.List<String> old = java.util.Arrays.asList(DebugCommands.commands());
         assert old.contains("/girl_executions") && !old.contains("/girl_execute") && !old.contains("/void");
         for (String usage : DebugCommands.commands()) {
+            if (usage.equals(DebugCommands.PHYSICS_COMMAND)) continue;
             String[] parts = usage.split(" +");
             for (int i = 1; i < parts.length; ++i) assert DebugCommands.argumentValues(parts[i]).length > 0 : usage;
         }
@@ -80,6 +125,7 @@ public final class DebugCommandsTest {
         assert DebugCommands.argumentValues("chapter_num").length == 7;
         assert DebugCommands.argumentValues("zone").length == 21;
         assert DebugCommands.argumentValues("[zone]")[0].isEmpty();
-        System.out.println("debug commands: JNI byte limit, Unicode, control rejection, 26 levels, selectors for every argument PASS");
+        assert java.util.Arrays.equals(DebugCommands.argumentValues("exit_number"), new String[] {"0", "1", "2", "255"});
+        System.out.println("debug commands: complete categories, localized alphabet, manual entry last, JNI byte limit, 26 levels and argument selectors PASS");
     }
 }

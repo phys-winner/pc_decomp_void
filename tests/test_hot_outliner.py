@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import build_android as build
+from lift_release import find_compile_transforms, load_release
 from test_renderer_append import function
 
 
@@ -54,6 +55,40 @@ def main():
             results.append(dict(function=name, outlined_calls=counts[0], protected_outlined_calls=counts[1]))
     finally:
         build.OUT, build.RELEASE = previous_out, previous_release
+    release = json.loads((ROOT / 'generated/tension/release.json').read_text())
+    release['compile_transforms'] = find_compile_transforms('tension', load_release('tension'), ROOT / 'generated/tension')
+    previous_native = build.NATIVE_OVERRIDES
+    try:
+        build.OUT, build.RELEASE = out / 'tension', release
+        build.NATIVE_OVERRIDES = tuple(release['native_overrides'])
+        tension_cases = [('renderer', name) for name in ('sub_16014290', 'sub_160016C0', 'sub_160902D0', 'sub_1608F790')]
+        for module, old_name in tension_cases + [('engine', 'sub_11034940')]:
+            name = 'sub_%08X' % build.compile_address(int(old_name[4:], 16))
+            paths = [p for p in (ROOT / f'generated/tension/{module}-x86').glob('*.c')
+                     if ('void ' + name + '(void)').encode() in p.read_bytes()]
+            assert len(paths) == 1, (name, paths)
+            path = paths[0]
+            patched, _ = build.override_source(path, True)
+            attribute = b'__attribute__((section(".text.hot"))) void ' + name.encode() + b'(void) {'
+            assert attribute in patched.read_bytes()
+            body = build.localize_fpu(build.localize_sse((function(path, name) + '\n').encode()))
+            counts = []
+            for protected in (False, True):
+                selected = body.replace(('void ' + name + '(void) {').encode(), attribute, 1) if protected else body
+                source = build.OUT / (name + ('-hot.c' if protected else '-outlined.c'))
+                source.write_bytes(f'#include "{module}_funcs.h"\n'.encode() + selected)
+                assembly = source.with_suffix('.s')
+                subprocess.run([str(build.CLANG), *build.GENERATED_FLAGS, '-DRECOMP_LOCAL_REGS',
+                    '-DRECOMP_PLAIN_MEMORY', '-I' + str(path.parent), '-S', str(source), '-o', str(assembly)],
+                    cwd=ROOT, capture_output=True, text=True, check=True)
+                emitted = re.search(r'^' + name + r':.*?^\.Lfunc_end\d+:', assembly.read_text(), re.M | re.S)
+                assert emitted, name
+                counts.append(len(re.findall(r'\b(?:bl|b)\s+OUTLINED_FUNCTION_\d+', emitted[0])))
+                if protected:
+                    assert counts[-1] == 0, (name, counts)
+            results.append(dict(release='tension', function=name, outlined_calls=counts[0], protected_outlined_calls=counts[1]))
+    finally:
+        build.OUT, build.RELEASE, build.NATIVE_OVERRIDES = previous_out, previous_release, previous_native
     assert sum(r['outlined_calls'] for r in results) > 0, 'negative control did not exercise outlining'
     (out / 'result.json').write_text(json.dumps(dict(status='PASS', results=results), indent=2))
     print(json.dumps(results, indent=2))

@@ -13,11 +13,10 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
-/** The D3DX shader cache made on the PC (tools/shader_service.py, carried in
- *  the APK's assets/shadercache): the device cannot compile HLSL, and a
- *  shader the cache lacks stops the game (android/host/d3dx9.c), so
- *  one app-private copy is shared by all profiles. Writable per-profile
- *  shadercache files still override these bundled results in d3dx9.c.
+/** Bundled D3DX shader answers prepared on the PC (tools/shader_service.py,
+ *  carried in assets/shadercache), shared by all profiles in app-private storage.
+ *  On a cache miss, android/host/d3dx9.c compiles HLSL on the device and keeps
+ *  the learned answer. Each profile's writable shadercache is another lookup source.
  *  The bundled manifest also verifies and repairs interrupted or corrupt copies. */
 final class ShaderCache {
     private ShaderCache() { }

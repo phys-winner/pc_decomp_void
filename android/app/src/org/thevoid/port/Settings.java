@@ -483,7 +483,7 @@ final class Settings {
         {"Back to the game", "Назад", "Zurück zum Spiel", "Powrót do gry"},
         {"Exit", "Выйти", "Spiel verlassen", "Wyjdź"},
         {"Main menu item names", "Названия пунктов главного меню", "Namen der Hauptmenüpunkte", "Nazwy pozycji menu głównego"},
-        {"Water reflections", "Отражения в воде", "Spiegelungen im Wasser", "Odbicia w wodzie"},
+        {"Reflections", "Отражения", "Spiegelungen", "Odbicia"},
     };
 
     /** The release's language (fsystems.xml: Russian, German, Polish,

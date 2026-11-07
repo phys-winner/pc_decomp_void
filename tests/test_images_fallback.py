@@ -29,6 +29,17 @@ public final class AssetManager {
         return new java.io.FileInputStream(new java.io.File(root, name));
     }
 }""",
+    "org/thevoid/port/Unpacker.java": """package org.thevoid.port;
+final class Unpacker {
+    static java.io.File child(java.io.File dir, String name) {
+        if (dir == null) return null;
+        java.io.File direct = new java.io.File(dir, name);
+        if (direct.exists()) return direct;
+        String[] names = dir.list();
+        if (names != null) for (String n : names) if (n.equalsIgnoreCase(name)) return new java.io.File(dir, n);
+        return null;
+    }
+}""",
     "android/util/Log.java": """package android.util;
 public final class Log {
     public static int i(String tag, String message) { return 0; }

@@ -1,4 +1,4 @@
-"""Compile every static and procedural shader shipped in the 2009 release.
+"""Compile every static and procedural shader shipped in the prepared releases.
 
 Uses the game's Effects/static.xml, including its defines and all profiles
 allowed by a '>profile' entry. Results use android/host/d3dx9.c's exact key
@@ -47,8 +47,9 @@ def verify_tutorial_bytecode(results):
         assert hashlib.sha256(data).hexdigest() == shader["bytecode_sha256"], shader["key"]
 
 
-def shaders():
-    yield from tutorial_shaders()
+def shaders(index_name="research/vfs-index.json"):
+    if index_name == "research/vfs-index.json":
+        yield from tutorial_shaders()
     # RendererD3D generates these before reading Effects/static.xml, even with an empty profile.
     source = (b"struct VS_INPUT {\nfloat4 Position: POSITION;\n};\n\n"
               b"float4x4 FullTransform: register(c0);\n\n"
@@ -58,7 +59,7 @@ def shaders():
         macros = f"profile_{profile}=1\nprofile_vs=1\n".encode()
         yield "startup/position/" + profile, *request(source, profile, macros, flags=0x8010)
 
-    index = json.loads((ROOT / "research/vfs-index.json").read_text(encoding="utf-8"))
+    index = json.loads((ROOT / index_name).read_text(encoding="utf-8"))
     entries = {entry["name"].lower(): (Path(index["source"]) / container["name"], entry)
                for container in index["containers"] for entry in container["entries"]}
 
@@ -100,9 +101,12 @@ def main():
     requests.mkdir(parents=True, exist_ok=True)
     results.mkdir(parents=True, exist_ok=True)
     manifest = {}
-    for name, key, data in shaders():
-        (requests / (key + ".req")).write_bytes(data)
-        manifest[name] = key
+    for prefix, index_name in (("", "research/vfs-index.json"), ("tension/", "research/vfs-index.polish.json")):
+        if prefix and not (ROOT / index_name).is_file():
+            continue
+        for name, key, data in shaders(index_name):
+            (requests / (key + ".req")).write_bytes(data)
+            manifest[prefix + name] = key
     completed = subprocess.run([str(build_tool()), str(requests), str(results)],
                                capture_output=True, text=True, check=True)
     absent = [key for key in manifest.values() if not (results / (key + ".bin")).is_file()]

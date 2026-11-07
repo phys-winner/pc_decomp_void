@@ -16,6 +16,7 @@ debuggable APK), which keeps iterations on the touch layer to a small install.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import json
 import os
 import struct
 from pathlib import Path
@@ -179,8 +180,7 @@ def main():
     modes = [(flag, name) for flag, name, on in (("--global-regs", "globalregs", args.global_regs),
                                                  ("--volatile-memory", "volatilemem", args.volatile_memory)) if on]
     want_2009 = args.release_only in (None, "void")
-    if want_2009:
-        run(sys.executable, ROOT / "tools/build_shader_cache.py")
+    run(sys.executable, ROOT / "tools/build_shader_cache.py")
     if not args.skip_native and want_2009:
         subprocess.run([sys.executable, str(ROOT / "tools/build_android.py"), "--shared", "--jobs", "12",
                         *(flag for flag, _ in modes)], check=True)
@@ -225,12 +225,11 @@ def main():
         for f in sorted(overrides.rglob("*")):
             if f.is_file():
                 apk.write(f, "assets/overrides/" + f.relative_to(overrides).as_posix())
-        # The D3DX shader cache made on the PC (tools/shader_service.py): the
-        # device cannot compile HLSL, so every profile gets what is known
-        # (ShaderCache.java) - a fresh profile, full HDR's shaders. About two
-        # thirds of the results are byte-identical (distinct shader keys that
-        # compile to the same bytecode), so each unique content ships once and
-        # the rest become symbolic links on the device (ShaderCache.java). The index
+        # Known D3DX answers prepared on the PC (tools/shader_service.py),
+        # shared by all profiles (ShaderCache.java); d3dx9.c compiles misses
+        # on the device. Distinct keys can compile to byte-identical answers,
+        # so each unique payload ships once and
+        # the rest become hard links on the device (ShaderCache.java). The index
         # names every shader; an alias carries a fourth field, the name whose
         # bytes were shipped. Content is grouped within an extension so a .bin
         # never aliases an .err.
@@ -291,11 +290,26 @@ def main():
                 lib.unlink()
             apk.writestr("assets/native/index.txt", "".join(index))
             # Each library's images, so that a phone needs only the game's files.
+            image_assets = {}
+            tension = json.loads((ROOT / "config/releases/tension.json").read_text())
+            originals = {m["name"] + (".exe" if m["name"] == "Game" else ".dll"): m["sha256"]
+                         for m in tension["modules"] if m["name"] in ("Game", "GameModule")}
             for folder, files in ([lifted_images(None)] if want_2009 else []) + [lifted_images(n) for n in release_names]:
                 index = []
                 for f in files:
-                    apk.write(f, f"assets/{folder}/{f.name}")
-                    index.append(f"{f.name} {f.stat().st_size} {sha256(f)}\n")
+                    digest, size = sha256(f), f.stat().st_size
+                    reference = ""
+                    if folder == "lifted-tension" and f.name in originals:
+                        if digest != originals[f.name]:
+                            raise SystemExit(f"{f.name} differs from the pinned Tension original")
+                        reference = "game:bin/win32/" + f.name
+                    elif digest in image_assets:
+                        reference = "apk:" + image_assets[digest]
+                    else:
+                        asset = f"{folder}/{f.name}"
+                        apk.write(f, "assets/" + asset)
+                        image_assets[digest] = asset
+                    index.append(f"{f.name} {size} {digest}" + (" " + reference if reference else "") + "\n")
                 apk.writestr(f"assets/{folder}/index.txt", "".join(index))
     aligned = OUT / "aligned.apk"
     run(TOOLS / "zipalign.exe", "-f", "-P", "16", "4", unsigned, aligned)   # stored .so entries on 16 KB pages

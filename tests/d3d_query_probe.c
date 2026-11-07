@@ -9,7 +9,8 @@ typedef struct { struct { uint32_t viewport[4]; } st; } d3d_device;
 typedef struct { d3d_device *dev; uint32_t type, gl, ended; void *fence; } d3d_query;
 enum { GL_QUERY_RESULT_AVAILABLE = 0x8867, GL_QUERY_RESULT = 0x8866,
        GL_SYNC_FLUSH_COMMANDS_BIT = 1, GL_TIMEOUT_EXPIRED = 0x911b,
-       GL_ALREADY_SIGNALED = 0x911a, D3D_OK = 0, S_FALSE_D3D = 1 };
+       GL_ALREADY_SIGNALED = 0x911a, GL_CONDITION_SATISFIED = 0x911c,
+       GL_WAIT_FAILED = 0x911d, D3D_OK = 0, S_FALSE_D3D = 1 };
 #define FOURCC(a,b,c,d) ((uint32_t)(a) | ((uint32_t)(b)<<8) | ((uint32_t)(c)<<16) | ((uint32_t)(d)<<24))
 static uint32_t args[5], memory[16];
 static d3d_device device;
@@ -18,7 +19,9 @@ static d3d_query query;
 #define MEM32(va) memory[(va)/4]
 #define QRY (&query)
 #define COM_METHOD(a,b,n) static uint32_t a##_##b(void)
-static unsigned available, result_any, ready_after_flush, event_timeout;
+static unsigned available, result_any, ready_after_flush;
+static GLenum event_result;
+static unsigned last_wait_flags;
 static unsigned calls[16], call_count, blocked_reads;
 static void record(unsigned call) { assert(call_count < 16); calls[call_count++] = call; }
 static void glFlush(void) { record(1); if (ready_after_flush) available = 1; }
@@ -30,8 +33,9 @@ static void glGetQueryObjectuiv(GLuint name, GLenum parameter, GLuint *value)
 }
 static GLenum glClientWaitSync(void *fence, unsigned flags, uint64_t timeout)
 {
-    assert(fence == (void *)(uintptr_t)1 && flags == GL_SYNC_FLUSH_COMMANDS_BIT && timeout == 0);
-    record(4); return event_timeout ? GL_TIMEOUT_EXPIRED : GL_ALREADY_SIGNALED;
+    assert(fence == (void *)(uintptr_t)1 && !(flags & ~GL_SYNC_FLUSH_COMMANDS_BIT) && timeout == 0);
+    last_wait_flags = flags;
+    record(4); return event_result;
 }
 
 /* PRODUCTION */
@@ -71,7 +75,9 @@ static void reset(unsigned type, unsigned ended, unsigned ready, unsigned flags,
     query.dev=&device; query.fence=(void *)(uintptr_t)fence;
     device.st.viewport[2]=2424; device.st.viewport[3]=1080;
     args[1]=out; args[2]=size; args[3]=flags;
-    available=ready; result_any=any; ready_after_flush=0; event_timeout=timeout;
+    available=ready; result_any=any; ready_after_flush=0;
+    event_result=timeout ? GL_TIMEOUT_EXPIRED : GL_ALREADY_SIGNALED;
+    last_wait_flags=UINT32_MAX;
     call_count=blocked_reads=0;
     memset(calls,0,sizeof calls);
     for (unsigned i=0;i<16;i++) memory[i]=0xa5a50000u+i;
@@ -120,6 +126,23 @@ int main(void)
         assert(qry_GetData()==D3D_OK && call_count==3 && calls[0]==1 && calls[1]==2 && calls[2]==3);
         assert(!blocked_reads);
     }
-    printf("PASS query FLUSH: %u asynchronous cases; pending/ready/null/undersized outputs; EVENT/VCACHE unchanged; no unavailable-result reads\n",cases);
+    unsigned event_cases=0;
+    const GLenum states[]={GL_ALREADY_SIGNALED,GL_CONDITION_SATISFIED,GL_TIMEOUT_EXPIRED,GL_WAIT_FAILED};
+    for(unsigned state=0;state<4;state++)for(unsigned flush=0;flush<2;flush++)
+    for(unsigned out=0;out<2;out++)for(unsigned si=0;si<3;si++) {
+        reset(8,1,0,flush,out?16:0,sizes[si],0,0,1);
+        event_result=states[state];
+        uint32_t untouched[16];memcpy(untouched,memory,sizeof memory);
+        uint32_t result=qry_GetData();
+        assert(last_wait_flags==(flush ? GL_SYNC_FLUSH_COMMANDS_BIT : 0));
+        assert(call_count==1 && calls[0]==4);
+        uint32_t expected=state==2 ? S_FALSE_D3D : state==3 ? 0x88760868u : D3D_OK;
+        assert(result==expected);
+        if(state<2 && out && sizes[si]>=4) untouched[4]=1;
+        assert(!memcmp(untouched,memory,sizeof memory));
+        ++event_cases;
+    }
+    assert(event_cases==48);
+    printf("PASS query FLUSH: %u asynchronous cases and %u EVENT flag/status/output cases; VCACHE unchanged; no unavailable-result reads\n",cases,event_cases);
     return 0;
 }

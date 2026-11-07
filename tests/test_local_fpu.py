@@ -29,7 +29,8 @@ def main():
     functions=[function(sources[0],'sub_1105E810'),function(sources[1],'sub_160D6ED0')]
     untouched=b'void sub_1105E800(void) {\n    fp_push(3); fp_pop();\n}\n'
     assert localize_fpu(untouched)==untouched
-    for forbidden in ('RECOMP_CALL(sub_11000000);','RECOMP_ICALL(0x11000000);','fp_push_i64(3);'):
+    for forbidden in ('RECOMP_CALL(sub_11000000);','RECOMP_ICALL(0x11000000);','fp_push_i64(3);',
+                      'void_fpu_state(0,0,0,0);'):
         unsupported=functions[0].replace('RECOMP_ENTER(',forbidden+'\n    RECOMP_ENTER(',1).encode()+b'\n'
         try: localize_fpu(unsupported)
         except AssertionError: pass

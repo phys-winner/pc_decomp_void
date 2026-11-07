@@ -101,8 +101,87 @@ static uint64_t driver(void)
     return driver_id = h;
 }
 
+typedef struct { char name[21]; uint64_t size; int64_t mtime; } binary_file;
+
+static int binary_file_older(const void *a, const void *b)
+{
+    const binary_file *x = a, *y = b;
+    return x->mtime == y->mtime ? strcmp(x->name, y->name) : (x->mtime > y->mtime) - (x->mtime < y->mtime);
+}
+
+/* Called on the GL thread: scan_caches must not query the driver's identity. */
+static void binary_housekeeping(void)
+{
+    static int checked;
+    if (checked) return;
+    checked = 1;
+    uint64_t current_driver = driver();
+    char path[1200], directory[1200];
+    binary_path(0, directory);
+    char *slash = strrchr(directory, '/');
+    if (!slash) return;
+    *slash = 0;
+    DIR *dir = opendir(directory);
+    if (!dir) return;
+    binary_file *files = NULL;
+    size_t count = 0, capacity = 0, removed = 0;
+    uint64_t kept = 0, freed = 0;
+    struct dirent *de;
+    while ((de = readdir(dir))) {
+        const char *name = de->d_name;
+        size_t length = strlen(name);
+        if ((length != 20 && length != 25) || strspn(name, "0123456789abcdef") != 16 ||
+            (strcmp(name + 16, ".bin") && strcmp(name + 16, ".bin.part"))) continue;
+        struct stat st;
+        snprintf(path, sizeof path, "%s/%s", directory, name);
+        if (lstat(path, &st) || !S_ISREG(st.st_mode) || st.st_size < 0) continue;
+        binary_header h;
+        FILE *f = length == 20 ? fopen(path, "rb") : NULL;
+        int valid = f && fread(&h, sizeof h, 1, f) == 1 && h.magic == BINARY_MAGIC &&
+            h.driver == current_driver && h.recipe == strtoull(name, NULL, 16) && h.length &&
+            h.length <= BINARY_LIMIT && (uint64_t)st.st_size == sizeof h + (uint64_t)h.length;
+        if (f) fclose(f);
+        if (!valid) {
+            if (!remove(path)) { ++removed; freed += (uint64_t)st.st_size; }
+            else kept += (uint64_t)st.st_size;
+            continue;
+        }
+        kept += (uint64_t)st.st_size;
+        if (count == capacity) {
+            size_t grown = capacity ? capacity * 2 : 256;
+            binary_file *more = realloc(files, grown * sizeof *files);
+            if (!more) continue;  /* Untracked bytes still count against the write budget. */
+            files = more; capacity = grown;
+        }
+        memcpy(files[count].name, name, 21);
+        files[count].size = (uint64_t)st.st_size;
+        files[count++].mtime = (int64_t)st.st_mtime;
+    }
+    closedir(dir);
+    if (kept > BINARY_BUDGET) {
+        qsort(files, count, sizeof *files, binary_file_older);
+        for (size_t i = 0; i < count && kept > BINARY_BUDGET * 3 / 4; ++i) {
+            snprintf(path, sizeof path, "%s/%s", directory, files[i].name);
+            if (!remove(path)) { kept -= files[i].size; freed += files[i].size; ++removed; }
+        }
+    }
+    free(files);
+    atomic_store_explicit(&binary_bytes, kept, memory_order_relaxed);
+    if (removed) void_log("[shaderwarm] program cache: removed %u file(s), %.1f MiB; %.1f MiB kept",
+        (unsigned)removed, (double)freed / 1048576.0, (double)kept / 1048576.0);
+}
+
+static void binary_remove(const char *path)
+{
+    struct stat st;
+    if (lstat(path, &st) || !S_ISREG(st.st_mode) || st.st_size < 0 || remove(path)) return;
+    uint64_t kept = atomic_load_explicit(&binary_bytes, memory_order_relaxed), size = (uint64_t)st.st_size;
+    atomic_store_explicit(&binary_bytes, kept > size ? kept - size : 0, memory_order_relaxed);
+}
+
 static GLuint binary_load(uint64_t recipe)
 {
+    binary_housekeeping();
     char path[1200];
     binary_path(recipe, path);
     FILE *f = fopen(path, "rb");
@@ -120,20 +199,24 @@ static GLuint binary_load(uint64_t recipe)
     }
     fclose(f);
     free(data);
-    if (!gl) remove(path);   /* another driver's, or damaged: linked again and replaced */
+    if (!gl) {
+        binary_remove(path);
+    }
     else atomic_fetch_add_explicit(&loaded_programs, 1, memory_order_relaxed);
     return gl;
 }
 
 static void binary_save(GLuint gl, uint64_t recipe)
 {
+    binary_housekeeping();
     char path[1200];
     binary_path(recipe, path);
     if (!access(path, F_OK)) return;
     GLint length = 0;
     glGetProgramiv(gl, GL_PROGRAM_BINARY_LENGTH, &length);
+    uint64_t stored_size = sizeof(binary_header) + (uint64_t)length;
     if (length <= 0 || (uint32_t)length > BINARY_LIMIT ||
-        atomic_load_explicit(&binary_bytes, memory_order_relaxed) + (uint64_t)length > BINARY_BUDGET) return;
+        atomic_load_explicit(&binary_bytes, memory_order_relaxed) + stored_size > BINARY_BUDGET) return;
     binary_header h = {BINARY_MAGIC, 0, 0, 0, driver(), recipe};
     void *data = malloc((size_t)length);
     GLsizei got = 0;
@@ -147,7 +230,9 @@ static void binary_save(GLuint gl, uint64_t recipe)
         FILE *f = fopen(part, "wb");
         int ok = f && fwrite(&h, sizeof h, 1, f) == 1 && fwrite(data, 1, (size_t)got, f) == (size_t)got;
         if (f && fclose(f)) ok = 0;
-        if (ok && !rename(part, path)) atomic_fetch_add_explicit(&binary_bytes, (uint64_t)got, memory_order_relaxed);
+        if (ok && !rename(part, path)) {
+            atomic_fetch_add_explicit(&binary_bytes, sizeof h + (uint64_t)got, memory_order_relaxed);
+        }
         else remove(part);
     }
     free(data);
@@ -257,6 +342,13 @@ static void scan_directory(const char *path, int recipe)
         int ok = fread(bytes, 1, (size_t)length, f) == (size_t)length;
         fclose(f);
         if (!ok || !(recipe ? valid_recipe(bytes, (size_t)length) : warm_bytecode_valid(bytes, (size_t)length))) { free(bytes); continue; }
+        if (recipe) {
+            const recipe_header *h = bytes;
+            const char *pixel = (const char *)(h + 1) + h->vertex_size;
+            /* Older Mojo recipes precede the fp32 repair; keep files and FF recipes. */
+            if (strstr(pixel, "precision mediump float;") && strstr(pixel, "#define texture2D texture\n") &&
+                strstr(pixel, "ps_")) { free(bytes); continue; }
+        }
         uint64_t hash = warm_hash(bytes, (size_t)length);
         warm_entry *e = queue;
         while (e && !(e->recipe == recipe && e->hash == hash && e->size == (uint32_t)length && !memcmp(e->bytes, bytes, (size_t)length))) e = e->next;
@@ -296,21 +388,7 @@ static void *scan_caches(void *unused)
     if (packaged[0]) scan_directory(packaged, 0);
     snprintf(path, sizeof path, "%s/shadercache", void_data_dir()); scan_directory(path, 0);
     recipe_directory(path); scan_directory(path, 1);
-    /* What the program cache holds already counts against its budget. */
-    binary_path(0, path);
-    char *slash = strrchr(path, '/');
-    if (slash) *slash = 0;
-    DIR *dir = opendir(path);
-    uint64_t bytes = 0;
-    struct dirent *de;
-    while (dir && (de = readdir(dir))) {
-        char file[1280];
-        struct stat st;
-        snprintf(file, sizeof file, "%s/%s", path, de->d_name);
-        if (de->d_name[0] != '.' && !stat(file, &st)) bytes += (uint64_t)st.st_size;
-    }
-    if (dir) closedir(dir);
-    atomic_fetch_add_explicit(&binary_bytes, bytes, memory_order_relaxed);
+    uint64_t bytes = atomic_load_explicit(&binary_bytes, memory_order_relaxed);
     void_log("[shaderwarm] caches scanned in %.0f ms: %u stages/programs; programs kept %.1f MB",
         (double)(void_monotonic_ns() - began) / 1e6, queued, (double)bytes / 1048576.0);
     atomic_store_explicit(&scan_finished, 1, memory_order_release);

@@ -72,6 +72,13 @@ final class GameCleanup {
             String target = needed.getAbsolutePath().toLowerCase(Locale.ROOT);
             if (path.equals(target) || target.startsWith(path + File.separator) || path.startsWith(target + File.separator)) return true;
         }
+        // Loose resources also ship outside data in translation/mod folders.
+        for (File parent = file; parent != null && !parent.equals(root); parent = parent.getParentFile()) {
+            String folder = parent.getName().toLowerCase(Locale.ROOT);
+            if (parent.isDirectory() && (folder.equals("animations") || folder.equals("effects") || folder.equals("gestures")
+                || folder.equals("physics") || folder.equals("prefabs") || folder.equals("properties") || folder.equals("scenes")
+                || folder.equals("scripts") || folder.equals("sounds") || folder.equals("textures") || folder.equals("video"))) return true;
+        }
         String name = file.getName().toLowerCase(Locale.ROOT);
         if (file.getParentFile().equals(root)) {
             if (name.equals("game.txt") || file.isDirectory() && (name.startsWith("lifted") || name.startsWith("game"))) return true;

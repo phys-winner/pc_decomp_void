@@ -17,13 +17,14 @@ import sys
 import time
 
 from toolchain import NDK
+from fpu_state import patch_fpu_state
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = ("game", "gamemodule", "engine", "fs", "vfs", "sound", "video", "renderer", "nxcharacter",
            "physxcore", "physxcooking", "d3dxcompiler")
 TOOLCHAIN = NDK / "toolchains/llvm/prebuilt/windows-x86_64"
 CLANG = TOOLCHAIN / "bin/clang.exe"
-API = 30
+API = 26   # Match minSdkVersion; pre-29 Android requires emulated TLS.
 TARGET = f"aarch64-linux-android{API}"
 OUT = ROOT / "build/arm64"
 COMMON = ["--target=" + TARGET, "-fno-strict-aliasing", "-fwrapv", "-fvisibility=hidden", "-fPIC",
@@ -141,22 +142,33 @@ FPU_GLOBAL = (b"#undef _st\n#undef _fp_top\n#define _st g_st\n#define _fp_top g_
               b"#define RECOMP_FP_OUT() ((void)0)\n#define RECOMP_FP_IN() ((void)0)\n")
 
 
+def compile_address(address, kind="functions"):
+    if RELEASE is None:
+        return address
+    return int(RELEASE.get("compile_transforms", {}).get(kind, {}).get(hex(address), "0"), 0)
+
+
 def localize_fpu(text):
     parts, pos = [], 0
+    functions = {b"sub_%08X" % target: name for name in LOCAL_FPU_FUNCTIONS
+                 if (target := compile_address(int(name[4:], 16)))}
     for match in FUNCTION_START.finditer(text):
         name = match.group(0).split(b"(", 1)[0].split()[-1]
-        if name.removesuffix(b"_lifted") not in LOCAL_FPU_FUNCTIONS:
+        canonical = functions.get(name.removesuffix(b"_lifted"))
+        if canonical is None:
             continue
         end = FUNCTION_END.search(text, match.end())
         assert end and match.start() >= pos
         body = text[match.end():end.end()]
-        assert not any(x in body for x in (b"RECOMP_CALL(", b"RECOMP_ICALL(", b"fp_push_i64("))
+        assert not any(x in body for x in (b"RECOMP_CALL(", b"RECOMP_ICALL(", b"fp_push_i64(", b"void_fpu_state("))
         assert b"fp_push(" in body and b"fp_pop()" in body
         baseline = b"static __attribute__((noinline)) " + match.group(0).replace(name, name + b"_fp_global") + body
         localized = body.replace(b"g_st_i64", b"l_st_i64")
-        epsilon = b"0x11122CE0" if name.removesuffix(b"_lifted") == b"sub_1105E810" else b"0x162D2A64"
-        guard = (b"!void_physics_sweep_finite()" if name == b"sub_18064830" else
-                 b"!void_renderer_particle_finite()" if name == b"sub_160902D0" else
+        epsilon = b"0x%08X" % compile_address(0x11122CE0 if canonical == b"sub_1105E810" else 0x162D2A64, "constants")
+        particle = b"!void_renderer_particle_finite(0x%08Xu, 0x%08Xu, 0x%08Xu, 0x%08Xu)" % tuple(
+            compile_address(value, "constants") for value in (0x162D2A54, 0x162EC318, 0x162EC354, 0x1635FF38))
+        guard = (b"!void_physics_sweep_finite()" if canonical == b"sub_18064830" else
+                 particle if canonical == b"sub_160902D0" else
                  b"!void_renderer_native_enabled() || MEM32(" + epsilon + b") != 0x3f7fffefu || "
                  b"!recomp_sat_finite(g_edx, MEM32(g_esp + 4))")
         start = (b"\n    if (" + guard + b") { " + name + b"_fp_global(); return; }\n"
@@ -166,19 +178,21 @@ def localize_fpu(text):
         pos = end.end()
     if not parts:
         return text
-    return (b"int void_renderer_native_enabled(void);\nint void_physics_sweep_finite(void);\n"
-            b"int void_renderer_particle_finite(void);\n" + b"".join(parts + [text[pos:]]))
+    return (b"#include <stdint.h>\nint void_renderer_native_enabled(void);\nint void_physics_sweep_finite(void);\n"
+            b"int void_renderer_particle_finite(uint32_t, uint32_t, uint32_t, uint32_t);\n" + b"".join(parts + [text[pos:]]))
 
 
 def localize_physics_tree(text):
     """Local x87 only during each ray/tree node's pure rejection arithmetic."""
-    entry = b"void sub_1819AF40(void) {"
+    address = compile_address(0x1819AF40)
+    entry = b"void sub_%08X(void) {" % address
     if entry not in text:
         return text
     start = text.index(entry)
     end = FUNCTION_END.search(text, start).end()
     body = text[start:end]
-    first, after = b"L_1819AF5B:", b"L_1819B075:"
+    tree_label = lambda old: b"L_%08X" % (address + old - 0x1819AF40)
+    first, after = tree_label(0x1819AF5B) + b":", tree_label(0x1819B075) + b":"
     a, b = body.index(first), body.index(after)
     block = body[a:b]
     assert not any(x in block for x in (b"RECOMP_CALL(", b"RECOMP_ICALL(", b"RECOMP_BACKEDGE", b"fp_push_i64("))
@@ -186,7 +200,7 @@ def localize_physics_tree(text):
     for label in set(re.findall(rb"^(L_[0-9A-F]+):", block, re.M)):
         fast = fast.replace(label, label.replace(b"L_", b"F_"))
     exits = set(re.findall(rb"goto (L_[0-9A-F]+);", fast))
-    assert exits == {b"L_1819B1F2", b"L_1819B207", b"L_1819B21A", b"L_1819B22F", b"L_1819B235"}
+    assert exits == {tree_label(old) for old in (0x1819B1F2, 0x1819B207, 0x1819B21A, 0x1819B22F, 0x1819B235)}
     for label in exits:
         fast = fast.replace(b"goto " + label + b";", b"{ RECOMP_FP_OUT(); goto " + label + b"; }")
     setup = (first + b"\n    if (void_physics_tree_node_finite(esi, edi, ebp)) {\n"
@@ -202,27 +216,30 @@ def localize_physics_tree(text):
 
 def localize_physics_worker(text):
     """Local x87 for the worker's bounded, call-free transform preparation."""
-    entry = b"void sub_181F1F80(void) {"
+    address = compile_address(0x181F1F80)
+    entry = b"void sub_%08X(void) {" % address
     if entry not in text:
         return text
     start = text.index(entry)
     end = FUNCTION_END.search(text, start).end()
     body = text[start:end]
-    first, call = b"L_181F1F80:", b"    RECOMP_CALL(sub_181E7720);"
+    first = b"L_%08X:" % address
+    call = b"    RECOMP_CALL(sub_%08X);" % compile_address(0x181E7720)
     a, b = body.index(first), body.index(call)
     block = body[a:b]
-    assert re.findall(rb"^(L_[0-9A-F]+):", block, re.M) == [b"L_181F1F80"]
+    assert re.findall(rb"^(L_[0-9A-F]+):", block, re.M) == [first[:-1]]
     assert not any(x in block for x in (b"RECOMP_CALL(", b"RECOMP_ICALL(", b"RECOMP_BACKEDGE",
                                        b"fp_push_i64(", b"goto ", b"/=", b" / ", b"sqrt("))
-    fast = block.replace(first, b"F_181F1F80:").replace(b"g_st_i64", b"l_st_i64")
+    fast = block.replace(first, first.replace(b"L_", b"F_")).replace(b"g_st_i64", b"l_st_i64")
     setup = (first + b"\n    if (void_physics_worker_pair_finite()) {\n"
              b"        double l_st[8]; int64_t l_st_i64[8]; int l_fp_top = g_fp_top;\n"
              b"        memcpy(l_st, g_st, sizeof l_st); memcpy(l_st_i64, g_st_i64, sizeof l_st_i64);\n")
     # Flush before the original first call; its entire continuation and all
     # callbacks, loop backedges and later mutable inputs retain global x87.
+    done = b"L_%08X_LOCAL_DONE" % (address + 0x8A4)
     patched = (body[:a] + setup + FPU_LOCAL + fast +
-               b"    RECOMP_FP_OUT(); goto L_181F2824_LOCAL_DONE;\n    }\n" +
-               FPU_GLOBAL + block[len(first):] + b"L_181F2824_LOCAL_DONE:\n" + body[b:])
+               b"    RECOMP_FP_OUT(); goto " + done + b";\n    }\n" +
+               FPU_GLOBAL + block[len(first):] + done + b":\n" + body[b:])
     return (text[:start] + b"int void_physics_worker_pair_finite(void);\n" + patched + text[end:])
 
 
@@ -343,15 +360,19 @@ def override_source(source, local_xmm):
         text = text.replace(b"\nvoid %s(void) {" % name.encode(), b"\nvoid %s_lifted(void) {" % name.encode(), 1)
     if source.name != "recomp_dispatch.c":
         module = source.parent.name[:-len("-x86")]
+        if RELEASE is None and b"FPU state is not a memory image here" in text:
+            text = patch_fpu_state(text, module_image(module))
         if b"goto _ljump; }" in text:
             text = direct_jump_tables(text, module_image(module))
         if local_xmm:
             text = localize_sse(text)
-        if RELEASE is None:
-            text = localize_fpu(text)
-            text = localize_physics_tree(text)
-            text = localize_physics_worker(text)
-            text = HOT_FUNCTION_START.sub(rb'__attribute__((section(".text.hot"))) \g<0>', text)
+        text = localize_fpu(text)
+        text = localize_physics_tree(text)
+        text = localize_physics_worker(text)
+        hot = [b"sub_%08X" % target for name in HOT_FUNCTIONS if (target := compile_address(int(name[4:], 16)))]
+        if hot:
+            pattern = re.compile(rb"^void (?:" + b"|".join(hot) + rb")\(void\) \{", re.M)
+            text = pattern.sub(rb'__attribute__((section(".text.hot"))) \g<0>', text)
     if text == original:
         return source, []
     patched = OUT / "patched" / source.parent.name / source.name
@@ -506,12 +527,12 @@ def main():
                              "names the output, the script command 'profile' writes it)")
     parser.add_argument("--pgo-use", metavar="PROFDATA", default=None,
                         help="Optimise the generated code with a merged profile (llvm-profdata merge); "
-                             "default build/pgo/void.profdata when it exists (tools/android_pgo.sh)")
+                             "default build/pgo/<release>.profdata (void for 2009) when it exists")
     parser.add_argument("--no-pgo", action="store_true", help="Build without the profile")
     parser.add_argument("--compile-only", action="store_true", help="Compile the objects, do not link")
     parser.add_argument("--release", metavar="NAME",
                         help="Build another release of the game lifted by tools/lift_release.py "
-                             "(generated/NAME, build/arm64-NAME, libvoid_NAME.so); never with the 2009 profile")
+                             "(generated/NAME, build/arm64-NAME, libvoid_NAME.so); uses its own PGO profile")
     args = parser.parse_args()
     global GENERATED, RELEASE, MODULES, MODULE_IMAGES, NATIVE_OVERRIDES
     if args.release:
@@ -533,12 +554,14 @@ def main():
         MODULES = tuple(RELEASE["modules"]) + tuple(RELEASE.get("shared_modules", {}))
         MODULE_IMAGES = dict(RELEASE["images"])
         NATIVE_OVERRIDES = tuple(RELEASE["native_overrides"]) + ("sub_1017D3C0", "sub_101C4FC0", "sub_101BE240")
-        args.no_pgo = True
     # The first location gains ~12% (42-51 fps against 38-45) from the
     # profile, the map's settled phase more; a build without it is an explicit
     # choice, since it recompiles every generated object.
-    if args.pgo_use is None and not args.no_pgo and not args.pgo_generate and (ROOT / "build/pgo/void.profdata").is_file():
-        args.pgo_use = str(ROOT / "build/pgo/void.profdata")
+    default_profile = ROOT / "build/pgo" / f"{args.release or 'void'}.profdata"
+    if args.pgo_use is None and not args.no_pgo and not args.pgo_generate and default_profile.is_file():
+        args.pgo_use = str(default_profile)
+    if args.release and args.pgo_use and Path(args.pgo_use).resolve() == ROOT / "build/pgo/void.profdata":
+        parser.error("a release needs its own PGO profile, not the 2009 profile")
     if args.no_pgo:
         args.pgo_use = None
     # The default generated code keeps registers in locals and accesses guest
@@ -653,7 +676,7 @@ def main():
     output = OUT / (library if args.shared else "void-arm64")
     # LOAD segments on 16 KB boundaries: devices with 16 KB pages (and Android 16+'s
     # compatibility check) require it; 4 KB devices load such images unchanged.
-    link = [str(CLANG), "--target=" + TARGET, "-fuse-ld=lld", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc", "-Wl,-z,max-page-size=16384",
+    link = [str(CLANG), "--target=" + TARGET, "-fuse-ld=lld", "-Wl,--no-undefined", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc", "-Wl,-z,max-page-size=16384",
             "-Wl,--build-id=sha1", "-Wl,--pack-dyn-relocs=android", "@" + str(response), "-o", str(output), "-lm", "-lz", "-llog", "-ldl", "-lEGL", "-lGLESv3"]
     link += ["-shared", "-landroid", "-lOpenSLES", "-laaudio"] if args.shared else ["-pie"]
     if args.pgo_generate:

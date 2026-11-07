@@ -43,6 +43,9 @@ class CheckedLifter(Lifter):
         if mnemonic == "pause":
             # Spin-wait hint. The spinning loop's back edge already yields the machine.
             return [f"/* pause */ /* 0x{instruction.address:08X}: {instruction.mnemonic} {instruction.op_str} */"]
+        if mnemonic == "fsincos":
+            return [f"{{ double _a = _st[0]; _st[0] = sin(_a); fp_push(cos(_a)); }} _fpu_cmp = 1; "
+                    f"/* 0x{instruction.address:08X}: {instruction.mnemonic} {instruction.op_str} */"]
         if mnemonic in ("fprem", "fprem1"):
             if instruction.operands:
                 return [f'void_lift_trap(0x{instruction.address:08X}u, "unsupported FPREM operands");']

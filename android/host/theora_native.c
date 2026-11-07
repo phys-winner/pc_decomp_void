@@ -14,6 +14,9 @@
  *   state_loop_filter_frag_rows  0x10018ED0  (state, bv, refi, pli,
  *                                 fragy0, fragy_end)
  *
+ * Tension's 20070915 decoder uses C bodies at 0x100068D0/0x100070C0;
+ * its state layout is the same, with different mode numbers and bv origin.
+ *
  * The iDCT is libtheora's (lib/dec/idct.c, included unmodified); Theora
  * specifies it exactly, and the MMX routines give the same pixels.
  * VOID_THEORA=lifted runs the lifted bodies; =check runs both on the same
@@ -28,11 +31,16 @@
 #include "../../reference/libtheora/lib/dec/idct.c"
 #pragma clang diagnostic pop
 
-#ifndef VOID_RELEASE
+#ifdef VOID_RELEASE
+#include "release_overrides.h"
+#else
 #define THEORA_FRAG_RECON sub_15018800             /* the 2009 Video.dll */
 #define THEORA_FRAG_RECON_LIFTED sub_15018800_lifted
 #define THEORA_LOOP_FILTER sub_15018ED0
 #define THEORA_LOOP_FILTER_LIFTED sub_15018ED0_lifted
+#define THEORA_MODE_INTRA 1
+#define THEORA_FRAME_FOR_MODE 1, 2, 1, 1, 1, 0, 0, 1
+#define THEORA_BOUNDING_ZERO 127
 #endif
 
 #ifdef THEORA_FRAG_RECON
@@ -55,7 +63,6 @@ void THEORA_LOOP_FILTER_LIFTED(void);
 #define FRAG_MV 24u
 
 #define OC_FRAME_SELF 2
-#define OC_MODE_INTRA 1
 #define CLAMP255(x) ((unsigned char)((((x) < 0) - 1) & ((x) | -((x) > 255))))
 
 static const int OC_FZIG_ZAG[64] = {
@@ -68,9 +75,8 @@ static const int OC_FZIG_ZAG[64] = {
     58, 59, 52, 45, 38, 31, 39, 46,
     53, 60, 61, 54, 47, 55, 62, 63,
 };
-/* The reference frame of each macro block mode: PREV, SELF (intra), PREV,
- * PREV, PREV, GOLD, GOLD, PREV. */
-static const int OC_FRAME_FOR_MODE[8] = {1, 2, 1, 1, 1, 0, 0, 1};
+/* The 2007 and 2008 libtheora builds number their macro block modes differently. */
+static const int OC_FRAME_FOR_MODE[8] = { THEORA_FRAME_FOR_MODE };
 
 enum { THEORA_NATIVE, THEORA_LIFTED, THEORA_CHECK };
 static int theora_mode = -1;
@@ -141,7 +147,7 @@ static int frag_recon(uint32_t state, uint32_t frag, int pli, uint32_t coeffs, i
     int dst_stride = plane_stride(state, dst_framei, pli);
     uint8_t *dst = (uint8_t *)GPTR(MEM32(frag + FRAG_BUFFER + 4u * dst_framei));
     const int16_t *r = res;
-    if (mbmode == OC_MODE_INTRA) {
+    if (mbmode == THEORA_MODE_INTRA) {
         for (int i = 0; i < 8; ++i, dst += dst_stride)
             for (int j = 0; j < 8; ++j, ++r) dst[j] = CLAMP255(*r + 128);
         return 1;
@@ -190,7 +196,7 @@ static void loop_filter_v(uint8_t *pix, int ystride, const int32_t *bv)
  * edge; the order of the edges is VP3's. */
 static void loop_filter_rows(uint32_t state, uint32_t bv_va, int refi, int pli, int fragy0, int fragy_end)
 {
-    const int32_t *bv = (const int32_t *)GPTR(bv_va) + 127;
+    const int32_t *bv = (const int32_t *)GPTR(bv_va) + THEORA_BOUNDING_ZERO;
     int stride = plane_stride(state, (uint32_t)refi, pli);
     uint32_t fplane = state + TS_FPLANES + 32u * (uint32_t)pli;
     uint32_t nhfrags = MEM32(fplane), froffset = MEM32(fplane + 8), nfrags = MEM32(fplane + 12);

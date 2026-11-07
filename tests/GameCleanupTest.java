@@ -32,12 +32,17 @@ public final class GameCleanupTest {
             "data/Scenes/loose.bin", "Void/Cache/effects.hdr", "userdata/Documents/Savegames/a.bin",
             "userdata-qa20261025/void.log", "userdata-qa20261025/shadercache/a.bin",
             "lifted/Engine.dll", "game-german/bin/win32/Game.exe", "game-german/data/info.xml", "overrides/patched.bin",
-            "Other/Savegames/a.bin", "Other/user.cfg", "Other/settings.xml", "Documents/picture.png", "game.txt"};
+            "Other/Savegames/a.bin", "Other/user.cfg", "Other/settings.xml", "Documents/picture.png", "game.txt",
+            "PROPERTIES/Strings/menu.txt", "SOUNDS/dialogue.ogg", "Textures/menu.tex",
+            "translation/PrOpErTiEs/Strings/nested/menu.txt", "translation/sOuNdS/actors/voice.ogg",
+            "translation/tExTuReS/ui/menu.tex", "Animations/camera.ase", "Effects/shader.pss",
+            "Gestures/player.cdb", "Physics/actor.env", "Prefabs/actor.pre", "Scenes/level.s",
+            "Scripts/ui/menu.bin", "Video/intro.the"};
         for (String name : keep) put(root, name, data);
         put(root, "data/fsystems.xml", "<FileSystems><system><Path>../CustomTextures</Path></system></FileSystems>".getBytes("UTF-8"));
         put(root, "CustomTextures/loose.bin", data);
         String[] remove = {"manual.pdf", "PhysX_Setup.exe", "DirectX/DXSETUP.exe", "Other/readme.txt",
-            "game_setup.exe", "game_manual.pdf", "lifted_backup.dat"};
+            "game_setup.exe", "game_manual.pdf", "lifted_backup.dat", "Other/textures-manual/readme.txt"};
         for (String name : remove) put(root, name, data);
         GameCleanup.Plan plan = GameCleanup.scan(root);
         Set<String> found = new HashSet<>();
@@ -60,6 +65,12 @@ public final class GameCleanupTest {
         try { GameCleanup.delete(new GameCleanup.Plan(root, Arrays.asList(escaped))); throw new AssertionError("escape accepted"); }
         catch (IOException expected) { }
         assert outside.isFile();
+        File replacement = new File(root, "translation/PrOpErTiEs/Strings/nested/menu.txt");
+        GameCleanup.Entry protectedEntry = new GameCleanup.Entry(replacement,
+            Files.readAttributes(replacement.toPath(), java.nio.file.attribute.BasicFileAttributes.class));
+        try { GameCleanup.delete(new GameCleanup.Plan(root, Arrays.asList(protectedEntry))); throw new AssertionError("replacement accepted"); }
+        catch (IOException expected) { }
+        assert replacement.isFile() : "removed a loose replacement";
         assert new File(root, "CustomTextures/loose.bin").isFile() : "removed configured loose filesystem data";
 
         try {

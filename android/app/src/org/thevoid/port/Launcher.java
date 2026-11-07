@@ -3,6 +3,7 @@ package org.thevoid.port;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -176,14 +177,23 @@ public final class Launcher extends Activity {
         i.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
             "application/x-zip", "application/octet-stream"});
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        startActivityForResult(i, ASK_ARCHIVE);
+        try {
+            startActivityForResult(i, ASK_ARCHIVE);
+        } catch (ActivityNotFoundException e) {
+            error(text(E_NO_PICKER));
+        }
     }
 
     private void pickFolder(int request, File near) {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         Uri initial = near != null ? documentOf(near) : null;
         if (initial != null) i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
-        startActivityForResult(i, request);
+        try {
+            startActivityForResult(i, request);
+        } catch (ActivityNotFoundException e) {
+            if (request == ASK_TARGET) dropArchive();
+            error(text(E_NO_PICKER));
+        }
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
@@ -1201,7 +1211,7 @@ public final class Launcher extends Activity {
         T_TEX_STALE = 70, T_TEX_ASTC = 71, T_TEX_ETC2 = 72, T_TEX_REMOVE = 73, T_TEX_CONVERTING = 74, T_TEX_PROGRESS = 75,
         T_TEX_DONE = 76, T_TEX_FAILED = 77, T_TEX_STOPPED = 78, T_TEX_SPACE = 79, T_TEX_ASK = 80, T_TEX_SCANNING = 81,
         T_TEX_UNAVAILABLE = 82, T_TEX_REMOVE_ASK = 83, T_TEX_NOT_NEEDED = 84, T_TEX_STOP_ASK = 85, T_TEX_FINISHING = 86,
-        T_TEX_DONE_TIME = 87, T_TEX_UNREADABLE = 88, T_FPS = 89, T_FPS_WHY = 90, T_FPS_NONE = 91, T_FPS_VALUE = 92;
+        T_TEX_DONE_TIME = 87, T_TEX_UNREADABLE = 88, T_FPS = 89, T_FPS_WHY = 90, T_FPS_NONE = 91, T_FPS_VALUE = 92, E_NO_PICKER = 93;
     private static final String[][] TEXTS = {
         {"Game", "Игра", "Spiel", "Gra"},
         {"No game chosen yet", "Игра ещё не выбрана", "Noch kein Spiel gewählt", "Nie wybrano jeszcze gry"},
@@ -1396,6 +1406,10 @@ public final class Launcher extends Activity {
          "Częstotliwości odświeżania tego ekranu. Niższy limit to chłodniejszy telefon i dłuższa praca baterii."},
         {"None (%d Hz)", "Нет (%d Гц)", "Keine (%d Hz)", "Brak (%d Hz)"},
         {"%d FPS", "%d FPS", "%d FPS", "%d FPS"},
+        {"The system file picker is unavailable. Enable the Files app in Android settings and try again.",
+         "Системный выбор файлов недоступен. Включите приложение «Файлы» в настройках Android и попробуйте снова.",
+         "Die System-Dateiauswahl ist nicht verfügbar. Aktivieren Sie die App „Dateien“ in den Android-Einstellungen und versuchen Sie es erneut.",
+         "Systemowy wybór plików jest niedostępny. Włącz aplikację „Pliki” w ustawieniach Androida i spróbuj ponownie."},
     };
 
     static String text(int id) {

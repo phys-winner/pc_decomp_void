@@ -13,6 +13,7 @@
 #include <aaudio/AAudio.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
+#include <dlfcn.h>
 #include <jni.h>
 #include <math.h>
 #include <time.h>
@@ -587,8 +588,13 @@ void void_audio_output(const int16_t *frames, uint32_t count)
             AAudioStreamBuilder_setChannelCount(b, 2);
             AAudioStreamBuilder_setSampleRate(b, 48000);
             AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-            AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_GAME);
-            AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
+            /* These optional attributes arrived in API 28; API 26 keeps its defaults. */
+            typedef void (*set_usage_fn)(AAudioStreamBuilder *, aaudio_usage_t);
+            typedef void (*set_content_fn)(AAudioStreamBuilder *, aaudio_content_type_t);
+            set_usage_fn set_usage = (set_usage_fn)dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setUsage");
+            set_content_fn set_content = (set_content_fn)dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setContentType");
+            if (set_usage) set_usage(b, AAUDIO_USAGE_GAME);
+            if (set_content) set_content(b, AAUDIO_CONTENT_TYPE_MUSIC);
             result = AAudioStreamBuilder_openStream(b, &stream);
             if (result == AAUDIO_OK) result = AAudioStream_requestStart(stream);
             AAudioStreamBuilder_delete(b);

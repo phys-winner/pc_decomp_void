@@ -84,22 +84,60 @@ int main(void) {
     boolean panelVisible() { return false; }
     static final int SLOT_BACK = 19;
     boolean inSlot(int slot, float x, float y, int pad) { return true; }
+    static class PalettePicker { static final int FLOATS = 72; }
+    static class Input {
+        static final int LEFT=0, ESC=1;
+        int clicks, escapes, cursors; float x,y;
+        void cursorTo(float a,float b) { ++cursors; x=a; y=b; }
+        void click(int code) { assert code==LEFT; ++clicks; }
+        void tapKey(int code) { assert code==ESC; ++escapes; }
+    }
+    static class Touch { int cancelled; void cancel() { ++cancelled; } }
+    final Input in=new Input(); final Touch touch=new Touch();
+    final float[] slotValues=new float[27*PalettePicker.FLOATS];
+    boolean paintMode, journalHandled; int journalCalls;
+    boolean touchAdaptations() { return settings.touchAdaptations; }
+    void setPaintMode(boolean on) { paintMode=on; }
+    boolean journalBackToBody() { ++journalCalls; return journalHandled; }
     boolean oldBackTakesTouch() {
 ''' + guard + ''' return true;
         return false;
     }
+''' + method(controls, "void escape()") + '''
     public static void main(String[] args) {
         BackPriorityProbe p = new BackPriorityProbe();
         p.screen = S_BODY;
         assert !p.oldBackTakesTouch() : "the old Back image's transparent rectangle must not intercept Gold";
         p.screen = 2;
         assert p.oldBackTakesTouch() : "other screens retain their original Back action";
+        // Android Back must use Body's Escape handler, including carried Gold.
+        p = new BackPriorityProbe(); p.screen=S_BODY; p.escape();
+        assert p.in.escapes==1&&p.in.clicks==0&&p.in.cursors==0&&p.touch.cancelled==0
+            : "Android Back in Body/Gold must send Escape, not a measured mouse click";
+        p = new BackPriorityProbe(); p.screen=S_BODY; p.paintMode=true; p.escape();
+        assert !p.paintMode&&p.in.escapes==0&&p.in.clicks==0&&p.journalCalls==0
+            : "putting the brush down keeps priority over closing Body";
+        // Non-Body HUD_BACK still clicks the measured control, ahead of keys.
+        p = new BackPriorityProbe(); p.screen=2; p.paintMode=true;
+        int at=SLOT_BACK*PalettePicker.FLOATS+64;
+        p.slotValues[at]=.1f; p.slotValues[at+1]=.2f;
+        p.slotValues[at+2]=.3f; p.slotValues[at+3]=.6f;
+        p.escape();
+        assert !p.paintMode&&p.touch.cancelled==1&&p.in.clicks==1&&p.in.escapes==0&&p.journalCalls==0;
+        assert Math.abs(p.in.x-.2f)<.00001f&&Math.abs(p.in.y-.4f)<.00001f;
+        p = new BackPriorityProbe(); p.screen=4; p.hud=0; p.journalHandled=true; p.escape();
+        assert p.journalCalls==1&&p.in.escapes==0&&p.in.clicks==0
+            : "the journal bridge handles its own Escape without a second key";
+        p = new BackPriorityProbe(); p.screen=4; p.hud=0; p.escape();
+        assert p.journalCalls==1&&p.in.escapes==1&&p.in.clicks==0;
+        p = new BackPriorityProbe(); p.screen=2; p.settings.touchAdaptations=false; p.escape();
+        assert p.in.escapes==1&&p.in.clicks==0;
     }
 }
 ''', encoding="utf-8")
     subprocess.run([str(JAVA_HOME / "bin/javac.exe"), "--release", "8", "-d", str(out), str(java)], check=True, capture_output=True)
     subprocess.run([str(JAVA_HOME / "bin/java.exe"), "-ea", "-cp", str(out), "BackPriorityProbe"], check=True)
-    print("PASS: repeated body-widget presses, quick page taps without double clicks, normal Windows double-clicks, Gold/Back input priority")
+    print("PASS: repeated body-widget presses, quick page taps, Windows double-clicks, production Android Back Body/Gold Escape, paint/journal priority and non-Body measured Back")
 
 
 if __name__ == "__main__":

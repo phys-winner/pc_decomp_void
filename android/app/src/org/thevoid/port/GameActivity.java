@@ -245,7 +245,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 ShaderCache.install(this, getFilesDir(), (done, total) -> { cacheCompleted = done; cacheTotal = total; });
                 if (Thread.currentThread().isInterrupted()) return;
                 preparationPhase = 2;
-                File images = Images.dir(this, Launcher.baseDir(), release.images);
+                File images = Images.dir(this, Launcher.baseDir(), release.images, release.dir);
                 if (Thread.currentThread().isInterrupted()) return;
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
@@ -261,6 +261,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                     preparationPanel.removeCallbacks(preparationTick);
                     showPreparationDialog(startupText("Preparation failed", "Ошибка подготовки",
                             "Vorbereitung fehlgeschlagen", "Przygotowanie nie powiodło się"),
+                        e instanceof Images.OriginalRequired ? String.format(java.util.Locale.ROOT,
+                            startupText("Tension needs %s from the original Polish 2008 game. Restore the complete bin/win32 folder and try again.",
+                                "Для Tension нужен %s из оригинальной польской игры 2008 года. Восстановите полную папку bin/win32 и повторите попытку.",
+                                "Tension benötigt %s aus dem polnischen Original von 2008. Stellen Sie den vollständigen Ordner bin/win32 wieder her und versuchen Sie es erneut.",
+                                "Tension wymaga %s z oryginalnej polskiej gry z 2008 roku. Przywróć cały folder bin/win32 i spróbuj ponownie."), e.getMessage()) :
                         startupText("Could not prepare the game files. Please try again.", "Не удалось подготовить файлы игры. Попробуйте ещё раз.",
                             "Die Spieldateien konnten nicht vorbereitet werden. Bitte versuchen Sie es erneut.", "Nie udało się przygotować plików gry. Spróbuj ponownie."),
                         startupText("Retry", "Повторить", "Erneut versuchen", "Ponów"), () -> prepareAssets(release, data, root),

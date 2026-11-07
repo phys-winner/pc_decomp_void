@@ -314,7 +314,7 @@ void d3d_stateblock_apply(d3d_stateblock *sb);
 
 /* d3d9_gl.c */
 /* GL implementation limits, filled by d3d_gl_init (0 before). */
-typedef struct { uint32_t max_texture, max_3d_texture, max_draw_buffers; } d3d_gl_limits_t;
+typedef struct { uint32_t max_texture, max_3d_texture, max_draw_buffers; float max_anisotropy; } d3d_gl_limits_t;
 extern d3d_gl_limits_t d3d_gl_limits;
 /* Block formats the GPU samples directly (ETC2 is GLES 3.0 core). */
 typedef struct { int s3tc, astc; } d3d_gl_caps_t;

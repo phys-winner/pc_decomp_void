@@ -15,7 +15,7 @@
  *   memfind <word>        log guest addresses holding the word as UTF-16 (debugging)
  *   shot                  dump the next presented frame to <data>/frames
  *   trace                 trace the next frame (see VOID_TRACE_FRAME in d3d9_gl.c)
- *   shaderwarm [first last] pregenerate the 2009 library or an effect range (1..N)
+ *   shaderwarm [first last] pregenerate the effect library or an effect range (1..N)
  *   physicsfast <0|1>     compare original and optimized PhysX/debug-line leaves
  *   regionfast <0|1>      compare original and native weighted region lighting
  *   timescale <x>         run the game clock at x times real time (0.1 = slow motion)
@@ -84,7 +84,12 @@ static void hold(double seconds)
 int void_shader_warming;   /* The standalone collector needs no progress-window draws. */
 #endif
 
-#ifndef VOID_RELEASE
+#ifdef VOID_RELEASE
+#include "release_overrides.h"
+#else
+#define RENDERER_EFFECT_PREGENERATE_VA 0x16203D50u
+#define RENDERER_EFFECT_LIBRARY_VT 0x162D6794u
+#endif
 /* CEffectLibrary's hash-map list: node links, uint64 ID, shared_ptr<CEffectCustom>. */
 static int library_effects(uint32_t lib, uint32_t effects[512])
 {
@@ -97,7 +102,7 @@ static int library_effects(uint32_t lib, uint32_t effects[512])
         uint32_t effect = MEM32(node + 0x10);
         if (!void_vm_readable(effect, 0x10)) return 0;
         uint32_t vt = MEM32(effect + 0xC);
-        if (!void_vm_readable(vt, 64) || MEM32(vt + 60) != 0x16203D50u) return 0;
+        if (!void_vm_readable(vt, 64) || MEM32(vt + 60) != RENDERER_EFFECT_PREGENERATE_VA) return 0;
         effects[i] = effect;
         prev = node;
         node = MEM32(node);
@@ -107,7 +112,7 @@ static int library_effects(uint32_t lib, uint32_t effects[512])
 
 static void warm_shaders(int first, int last)
 {
-    uint32_t vt = 0x162D6794u, hits[64], effects[512], candidate[512];
+    uint32_t vt = RENDERER_EFFECT_LIBRARY_VT, hits[64], effects[512], candidate[512];
     void_machine_enter();
     int found = void_vm_find((const uint8_t *)&vt, sizeof vt, hits, 64), libraries = 0, count = 0;
     for (int i = 0; i < found; ++i) {
@@ -133,11 +138,11 @@ static void warm_shaders(int first, int last)
 #ifndef VOID_ANDROID_APP
     void_shader_warming = 1;
 #endif
-    extern int void_shader_pregenerating;   /* d3dx9.c: SM3 variants recorded for the PC, others refused */
+    extern _Thread_local int void_shader_pregenerating;   /* d3dx9.c: only this collector records SM3 misses */
     void_shader_pregenerating = 1;
     for (int i = first - 1; i < last; ++i) {
         uint64_t t0 = void_monotonic_ns();
-        uint32_t ok = void_call_guest_this(0x16203D50u, effects[i] + 0xC, 0, NULL);
+        uint32_t ok = void_call_guest_this(RENDERER_EFFECT_PREGENERATE_VA, effects[i] + 0xC, 0, NULL);
         ready += (ok & 0xFF) != 0;
         void_log("[shaderwarm] effect %d/%d: %s (%llu ms)", i + 1, count, (ok & 0xFF) ? "ready" : "unbounded",
             (unsigned long long)((void_monotonic_ns() - t0) / 1000000ull));
@@ -149,7 +154,6 @@ static void warm_shaders(int first, int last)
     void_log("[shaderwarm] complete %d..%d: %d effects ready", first, last, ready);
     void_machine_leave();
 }
-#endif
 
 static void run_event(const script_event *e)
 {
@@ -283,9 +287,7 @@ static void run_event(const script_event *e)
         }
         void_machine_leave();
     } else if (!strcmp(e->action, "shaderwarm")) {
-#ifndef VOID_RELEASE
         warm_shaders(e->a, e->b);
-#endif
     } else if (!strcmp(e->action, "profile")) {
         write_profile();
     } else if (!strcmp(e->action, "quit")) {

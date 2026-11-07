@@ -90,7 +90,7 @@ static void differential(unsigned yields, int expected_guard) {
     recomp_yield_hook=yields ? yield_hook : NULL;
     snapshot before=state();
     memcpy(initial_memory,memory,sizeof memory); memcpy(initial_constants,constants,sizeof constants);
-    int guard=void_renderer_particle_finite();
+    int guard=void_renderer_particle_finite(0x162d2a54u, 0x162ec318u, 0x162ec354u, 0x1635ff38u);
     /* The guard must not change emulated CPU state or guest memory. */
     snapshot guarded=state(); assert(!memcmp(&before,&guarded,sizeof before));
     assert(!memcmp(initial_memory,memory,sizeof memory) && !memcmp(initial_constants,constants,sizeof constants));
@@ -175,11 +175,11 @@ int main(int argc,char **argv) {
     initialize(3,1); differential(1,1);
     check_yield_memory=0;
     initialize(0,1);MEM32(HEADER+4)=MEM32(HEADER+8)=0;differential(0,0);
-    initialize(2,1);MEM32(HEADER+8)=RECORDS-24;assert(!void_renderer_particle_finite());
-    initialize(2,1);MEM32(HEADER+8)=RECORDS+25;assert(!void_renderer_particle_finite());
-    initialize(2,1);g_ecx=0;assert(!void_renderer_particle_finite());
-    initialize(2,1);g_esp=0x1003f;assert(!void_renderer_particle_finite());
-    initialize(2,1);g_edi=0x8000;assert(!void_renderer_particle_finite());
+    initialize(2,1);MEM32(HEADER+8)=RECORDS-24;assert(!void_renderer_particle_finite(0x162d2a54u, 0x162ec318u, 0x162ec354u, 0x1635ff38u));
+    initialize(2,1);MEM32(HEADER+8)=RECORDS+25;assert(!void_renderer_particle_finite(0x162d2a54u, 0x162ec318u, 0x162ec354u, 0x1635ff38u));
+    initialize(2,1);g_ecx=0;assert(!void_renderer_particle_finite(0x162d2a54u, 0x162ec318u, 0x162ec354u, 0x1635ff38u));
+    initialize(2,1);g_esp=0x1003f;assert(!void_renderer_particle_finite(0x162d2a54u, 0x162ec318u, 0x162ec354u, 0x1635ff38u));
+    initialize(2,1);g_edi=0x8000;assert(!void_renderer_particle_finite(0x162d2a54u, 0x162ec318u, 0x162ec354u, 0x1635ff38u));
     assert(fast_cases && fallback_cases);
     printf("PASS particle local x87 cases=%u fast=%u fallback=%u: exact emitted oracle, real guard, full memory/constants/CPU and scheduler snapshots\n",
             cases,fast_cases,fallback_cases);

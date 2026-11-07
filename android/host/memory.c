@@ -92,6 +92,15 @@ static int valid_protect(uint32_t protect)
     }
 }
 
+static int valid_vm_range(uint32_t address, uint32_t size)
+{
+    if (address >= GUEST_USER_TOP || (uint64_t)address + size > GUEST_USER_TOP) {
+        void_set_last_error(ERROR_INVALID_ADDRESS_);
+        return 0;
+    }
+    return 1;
+}
+
 static uint32_t find_free(uint32_t size, int top_down)
 {
     uint32_t need = (size + GUEST_GRANULARITY - 1) / GUEST_GRANULARITY;
@@ -183,6 +192,7 @@ uint32_t void_vm_alloc(uint32_t address, uint32_t size, uint32_t type, uint32_t 
         void_set_last_error(ERROR_INVALID_PARAMETER_);
         return 0;
     }
+    if (!valid_vm_range(address, size)) return 0;
     pthread_mutex_lock(&vm_lock);
     uint32_t result = 0;
     if (type & MEM_RESERVE_) {
@@ -238,6 +248,7 @@ int void_vm_claim(uint32_t address, uint32_t size, uint32_t protect)
 
 int void_vm_free(uint32_t address, uint32_t size, uint32_t type)
 {
+    if (!valid_vm_range(address, size)) return 0;
     pthread_mutex_lock(&vm_lock);
     uint32_t page = address >> 12;
     if (type & MEM_RELEASE_) {
@@ -287,6 +298,7 @@ int void_vm_free(uint32_t address, uint32_t size, uint32_t type)
 int void_vm_protect(uint32_t address, uint32_t size, uint32_t protect, uint32_t *old)
 {
     if (!size || !valid_protect(protect)) { void_set_last_error(ERROR_INVALID_PARAMETER_); return 0; }
+    if (!valid_vm_range(address, size)) return 0;
     pthread_mutex_lock(&vm_lock);
     uint32_t first = address >> 12, last = (uint32_t)(((uint64_t)address + size - 1) >> 12);
     for (uint32_t p = first; p <= last; ++p) {

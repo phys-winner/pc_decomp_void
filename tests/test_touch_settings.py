@@ -84,6 +84,7 @@ for index, lang in INDEXES.items():
     assert settings["PortShowMenuButton"].default is True
     assert settings["PortShowMenuLabels"].default is True
     assert settings["PortShowActionButton"].default is False
+    assert settings["PortReflections"].caption == {"ru": "Отражения", "de": "Spiegelungen", "en": "Reflections"}[lang]
     assert (settings["PortFOV"].default, settings["PortFOV"].lo, settings["PortFOV"].hi) == (55, 40, 100)
     assert (settings["PortVeinBrightness"].default, settings["PortVeinBrightness"].lo,
             settings["PortVeinBrightness"].hi) == (100, 100, 500)

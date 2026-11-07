@@ -1400,7 +1400,8 @@ int void_d3dx_serve(const char *page)
  * other models' variants are refused at once (the game never asks for them
  * with an SM3 strategy). The disassembly and assembly the game does with a
  * compiled variant go the usual way: recorded, answered by the fallback. */
-int void_shader_pregenerating;
+/* The collector can yield the guest lock while the render thread compiles. */
+_Thread_local int void_shader_pregenerating;
 
 /* Publish once, atomically: a reader must never pull a partial request.
  * 1 when the request is there (written now or before). */
@@ -1465,7 +1466,7 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
     uint64_t family = fnv(h, &flags, 4);
     h = fnv(h, profile, strlen(profile) + 1);
     h = fnv(h, &flags, 4);
-    char dir[1100], path[1200];
+    char dir[1100];
     static int made;
     if (!made) {
         snprintf(dir, sizeof dir, "%s/shadercache", void_data_dir());
@@ -1479,7 +1480,7 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
     int wait_s = shader_wait_seconds(now);
     /* A variant the service works on: no file system calls until it answers. */
     int state = SERVICE_NONE;
-    if (ring && function[0] != '@') {
+    if (!pregen && ring && function[0] != '@') {
         int i = pending_find(h);
         if (i >= 0) {
             state = pending_state(i, now);
@@ -1487,17 +1488,26 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
             pending_drop(i);   /* answered, late, or asked elsewhere: looked up and, missing, compiled here */
         }
     }
-    if (wait_s <= 0 && miss_recent(h, now)) {
+    if (!pregen && wait_s <= 0 && miss_recent(h, now)) {
         if (function[0] != '@') shader_family_result(h, family, 1);
         return 0;
     }
     int answer = cache_answer(h, out, hr, binary);
     if (answer) {
-        miss_note(h, now, 0);
-        if (answer > 0) shader_family_result(h, family, 0);
-        else shader_missing(h, 0);
+        if (!pregen) {
+            miss_note(h, now, 0);
+            if (answer > 0) shader_family_result(h, family, 0);
+            else shader_missing(h, 0);
+        }
         VLOG("[d3dx] %s/%s from cache %016llx (%s)", function, profile, (unsigned long long)h, answer > 0 ? "bytecode" : "error");
         return answer;
+    }
+    if (pregen) {
+        /* The service sweeps requests; keep PC collection and render misses separate. */
+        snprintf(dir, sizeof dir, "%s/shadercache/pregen-requests", void_data_dir());
+        mkdir(dir, 0775);
+        write_request(dir, 0, h, function, profile, flags, include, macros, mlen, src, len);
+        return 0;
     }
     /* Within RendererD3D's pass builder, with the compile service running,
      * the variant goes to the service and the builder fails this frame (the
@@ -1505,7 +1515,7 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
      * compile, up to most of a second on a Snapdragon 732G. The service has
      * no include handler (RendererD3D passes one, its generated text never
      * includes anything): a text with an #include is compiled here. */
-    if (!pregen && state != SERVICE_LATE && function[0] != '@' && wait_s <= 0 && async_here() &&
+    if (state != SERVICE_LATE && function[0] != '@' && wait_s <= 0 && async_here() &&
         (!include || !memmem(GPTR(src), len, "#include", 8)) &&
         service_alive() && write_request(ring_requests, 1, h, function, profile, flags, include, macros, mlen, src, len) &&
         service_post(h, now)) {
@@ -1516,7 +1526,7 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
         void_log("[d3dx] %016llx unanswered by the compile service: compiled here", (unsigned long long)h);
     /* The device compiles HLSL itself (the lifted Microsoft compiler), writes
      * the result into the cache and answers from it: no PC, no waiting. */
-    if (!pregen && function[0] != '@' && d3dx_device_fill(h, src, len, defines, include, function, profile, flags)) {
+    if (function[0] != '@' && d3dx_device_fill(h, src, len, defines, include, function, profile, flags)) {
         answer = cache_answer(h, out, hr, binary);
         if (answer) {
             miss_note(h, now, 0);
@@ -1528,9 +1538,8 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
     /* With the compile service running a request goes to it through the
      * app's private storage, not through shared storage (some 25 ms of the
      * frame each on a POCO X3: the renderer disassembles and assembles every
-     * new variant): answered for the next start. The pregenerator's
-     * requests stay in the profile for the PC. */
-    if (!pregen && ring && service_alive()) {
+     * new variant): answered for the next start. */
+    if (ring && service_alive()) {
         if (write_request(ring_requests, 1, h, function, profile, flags, include, macros, mlen, src, len)) service_wake(h);
     } else {
         record_request(h, function, profile, flags, include, macros, mlen, src, len);

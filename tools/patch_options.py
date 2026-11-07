@@ -107,9 +107,9 @@ for lang, values in {
     TEXTS[lang].update(zip(("menu_button", "action_button", "body_button"), values))
 
 for lang, value in {
-    "ru": "Отражения в воде",
-    "de": "Spiegelungen im Wasser",
-    "en": "Water reflections",
+    "ru": "Отражения",
+    "de": "Spiegelungen",
+    "en": "Reflections",
 }.items():
     TEXTS[lang]["reflections"] = value
 

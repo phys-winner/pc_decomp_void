@@ -5,6 +5,7 @@
  * The generated GLSL ES 3.00 is post-processed here:
  *   - vertex: D3D9's half-pixel rasterization offset (vpHalfPixel), applied
  *     after MojoShader's render-target flip;
+ *   - pixel: fp32 default precision for instructions without _pp;
  *   - pixel: the fixed-function alpha test (GLES has none) as a uniform test
  *     before every return from main.
  * D3DCOLOR inputs are swizzled by MojoShader itself (MOJOSHADER_swizzle), so a
@@ -158,6 +159,13 @@ static char *patch_source(const char *original, int pixel)
         return out;
     }
     char *fixed = fix_pixel_varyings(original);
+    /* Instructions without _pp require fp32, including temporary results. */
+    char *precision = strstr(fixed, "precision mediump float;");
+    if (precision) {
+        const char *tail = precision + sizeof("precision mediump float;") - 1;
+        memcpy(precision, "precision highp float;", sizeof("precision highp float;") - 1);
+        memmove(precision + sizeof("precision highp float;") - 1, tail, strlen(tail) + 1);
+    }
     char *out = patch_shader(fixed, 1);
     free(fixed);
     return out;

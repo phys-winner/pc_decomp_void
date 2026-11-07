@@ -82,6 +82,9 @@ TWINS = (
     # lifted body, may differ (0x121 in 2.8.1, 0x118 in 2.7.3).
     ("PhysXCore", 0x181802C0, "PHYSX_DEBUG_LINE", (0x1818035A,)),
 )
+# Address-only twins used by the shader collector; their original bodies stay lifted.
+EFFECT_TWINS = (("RendererD3D", 0x16203D50, "RENDERER_EFFECT_PREGENERATE_VA"),
+                ("RendererD3D", 0x161F05F0, None))
 TWIN_CONSTANTS = (   # (macro, the 2009 function whose twin holds it, the 2009 value)
     ("ENGINE_EPSILON", 0x110EC930, 0x11122974),            # float 1e-6
     ("ENGINE_FIXED_TO_UNITS", 0x110EC930, 0x11122D0C),     # float 0.005
@@ -89,6 +92,7 @@ TWIN_CONSTANTS = (   # (macro, the 2009 function whose twin holds it, the 2009 v
     ("RENDERER_SAT_EPSILON", 0x160D6ED0, 0x162D2A64),
     ("RENDERER_INFLATE_ZFREE", 0x1611E830, 0x161467A0),    # zlib's default allocator
     ("RENDERER_INFLATE_ZALLOC", 0x1611E830, 0x161467B0),
+    ("RENDERER_EFFECT_LIBRARY_VT", 0x161F05F0, 0x162D6794),
 )
 # zlib 1.2.3's messages in RendererD3D (renderer_inflate_native.c); the native
 # inflate hands back the image's own copy, "data error" when it has none.
@@ -263,6 +267,61 @@ class Body:
                 "NXSCENE_GET_TIMING": int.from_bytes(fetch[0][1][1], "little")}
 
 
+def find_compile_transforms(release, spec, generated):
+    """Checked addresses for build-time x87/hot-code passes, not native overrides."""
+    selected = {"Engine": (0x11034940, 0x1105E810),
+                "RendererD3D": (0x16014290, 0x160016C0, 0x160902D0, 0x160D6ED0),
+                "PhysXCore": (0x18064830, 0x1819AF40)}
+    functions, constants, bodies = {}, {}, {}
+    for module in spec["modules"]:
+        name, prefix = module["name"], module["prefix"]
+        if name not in selected:
+            continue
+        old = Body(ROOT / "generated/input" / module["path"].name,
+                   json.loads((ROOT / f"generated/{prefix}-x86/report.json").read_text()),
+                   ROOT / f"config/{name}.functions.json")
+        new = Body(generated / "input" / module["path"].name,
+                   json.loads((generated / f"{prefix}-x86/report.json").read_text()),
+                   ROOT / f"config/releases/{release}/{name}.functions.json")
+        bodies[name] = old, new
+        lifted = set(json.loads((generated / f"{prefix}-x86/functions.json").read_text()))
+        for address in selected[name]:
+            pattern, _ = old.body(address)
+            copies, hits = old.matches(pattern), new.matches(pattern)
+            if address not in copies or len(hits) != len(copies):
+                continue
+            twin, size = hits[copies.index(address)], old.sizes[address]
+            if twin not in lifted or new.sizes.get(twin) != size:
+                raise ValueError(f"compile transform: no lifted twin of {address:08X}")
+            if {i for i in range(size) if address + i in old.relocs} != {i for i in range(size) if twin + i in new.relocs}:
+                raise ValueError(f"compile transform: changed relocations at {twin:08X}")
+            functions[address] = twin
+            for i in range(size):
+                if address + i in old.relocs:
+                    before, after = old.u32(address + i), new.u32(twin + i)
+                    if constants.setdefault(before, after) != after:
+                        raise ValueError(f"compile transform: inconsistent constant {before:08X}")
+    if release == "tension":
+        # SDK/compiler changes alter the worker's stack slots and shorten its
+        # particle caller; pin their actual bodies instead of assuming twins.
+        new = bodies["PhysXCore"][1]
+        worker = 0x181B4550
+        if sha256(new.read(worker, 0x8A4)) != "b4bd577912ccf0a671bf14920bb8fa265dcc89de15439ba97b5d748af21e7ebe":
+            raise ValueError("Tension worker prefix changed")
+        if new.read(worker + 0x8A4, 1) != b"\xE8" or worker not in new.sizes:
+            raise ValueError("Tension worker first call changed")
+        functions[0x181F1F80] = worker
+        functions[0x181E7720] = worker + 0x8A9 + int.from_bytes(new.read(worker + 0x8A5, 4), "little", signed=True)
+        constants.update({0x182F0548: 0x182A5538, 0x18342240: 0x182EDEC0})
+        new = bodies["RendererD3D"][1]
+        caller = 0x1608F280
+        if new.sizes.get(caller) != 433 or sha256(new.read(caller, 433)) != "d68801e2b693efc5e24c8da02024125d8a8cac7d00fcd8f851fafff743b63795":
+            raise ValueError("Tension particle caller changed")
+        functions[0x1608F790] = caller
+    return {"functions": {hex(k): hex(v) for k, v in functions.items()},
+            "constants": {hex(k): hex(v) for k, v in constants.items()}}
+
+
 def find_twins(release, spec, generated):
     """TWINS, TWIN_CONSTANTS and INFLATE_MESSAGES in this release, by content."""
     modules = {m["name"]: m for m in spec["modules"]}
@@ -277,7 +336,7 @@ def find_twins(release, spec, generated):
                              ROOT / f"config/releases/{release}/{name}.functions.json"))
         functions[name] = set(json.loads((mine / "functions.json").read_text()))
     found, values, twins = {}, {}, []
-    for name, address, macro, *loose in TWINS:
+    for name, address, macro, *loose in (*TWINS, *EFFECT_TWINS):
         old, new = bodies[name]
         rx, exits = old.body(address, *loose)
         copies, hits = old.matches(rx), new.matches(rx)
@@ -297,7 +356,10 @@ def find_twins(release, spec, generated):
             displacement = int.from_bytes(new.read(twin + at, width), "little", signed=True)
             fields[target] = twin + at + width + displacement
         found[address] = (name, twin, fields)
-        twins.append({"macro": macro, "module": name, "2009": hex(address), "address": hex(twin)})
+        if macro == "RENDERER_EFFECT_PREGENERATE_VA":
+            values[macro] = twin
+        elif macro is not None:
+            twins.append({"macro": macro, "module": name, "2009": hex(address), "address": hex(twin)})
     for macro, function, value in TWIN_CONSTANTS:
         if function in found:
             values[macro] = found[function][2][value]
@@ -322,7 +384,41 @@ def find_twins(release, spec, generated):
             messages.append(hits[0])
         values["RENDERER_INFLATE_MESSAGES"] = messages
         values["RENDERER_INFLATE_DATA_ERROR"] = messages[INFLATE_MESSAGES.index(INFLATE_DATA_ERROR)]
+    video = modules.get("Video")
+    if video:
+        video_twins, video_values = find_theora(release, video, generated)
+        twins += video_twins
+        values.update(video_values)
     return twins, values
+
+
+def find_theora(release, module, generated):
+    """The 2007 C Theora implementation has a different mode table from 2009's MMX build."""
+    if module["sha256"] != "5419c0ceb31b0ec236353452403188d5c5463257092bbea61ba5341ce22f5ebd":
+        return [], {}
+    raw = module["path"].read_bytes()
+    if sha256(raw) != module["sha256"]:
+        raise ValueError("Theora: original Video.dll hash mismatch")
+    original = pefile.PE(data=raw, fast_load=True)
+    directory = generated / f"{module['prefix']}-x86"
+    body = Body(generated / "input" / module["path"].name,
+                json.loads((directory / "report.json").read_text()),
+                ROOT / f"config/releases/{release}/Video.functions.json")
+    lifted = set(json.loads((directory / "functions.json").read_text()))
+    twins = []
+    for macro, old, rva, size, digest in (
+        ("THEORA_FRAG_RECON", 0x15018800, 0x68D0, 510,
+         "9565578b2e195557142b2b4305e4b3e18b6bfd6751a4857a05892f339b14fcd2"),
+        ("THEORA_LOOP_FILTER", 0x15018ED0, 0x70C0, 425,
+         "08477ee1a6999275d77d468b495ae953c2cc59f85b9243fe3e21cf58bb252e9d"),
+    ):
+        address = module["base"] + rva
+        if sha256(original.get_data(rva, size)) != digest or body.sizes.get(address) != size or address not in lifted:
+            raise ValueError(f"{macro}: original body or lifted catalog mismatch")
+        twins.append({"macro": macro, "module": "Video", "2009": hex(old), "address": hex(address),
+                      "implementation": "theora-c-20070915"})
+    return twins, {"THEORA_MODE_INTRA": 0, "THEORA_FRAME_FOR_MODE": [2, 1, 1, 1, 1, 1, 0, 0],
+                   "THEORA_BOUNDING_ZERO": 256}
 
 
 def patch_vorbis_read(directory, report, address):
@@ -465,6 +561,7 @@ def finish(release, spec, generated):
         "release": release, "title": spec["title"], "modules": [m["prefix"] for m in spec["modules"]],
         "shared_modules": shared, "images": images,
         "native_overrides": native,
+        "compile_transforms": find_compile_transforms(release, spec, generated),
         "overrides": {**overrides, "crt_memmove": [{"module": n, "address": hex(a)} for n, a in crt]},
         "twins": twins, "twin_constants": {m: [hex(x) for x in v] if isinstance(v, list) else hex(v) for m, v in values.items()},
         "game_entry": hex(game_entry), "dispatch_entries": len(entries)}, indent=2) + "\n")

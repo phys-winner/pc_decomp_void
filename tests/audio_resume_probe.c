@@ -14,6 +14,8 @@ static const char *void_data_dir(void) { return test_profile; }
 typedef struct { int alive, started, disconnected; } AAudioStream;
 typedef int AAudioStreamBuilder;
 typedef int32_t aaudio_result_t;
+typedef int32_t aaudio_usage_t;
+typedef int32_t aaudio_content_type_t;
 typedef unsigned useconds_t;
 typedef int pthread_mutex_t;
 typedef int pthread_t;
@@ -26,6 +28,7 @@ typedef int pthread_t;
 static _Atomic int audio_paused;
 static AAudioStream streams[256];
 static int creates, closes, writes, sleeps, locked, builder_fail, open_fail, start_fail, write_error, partial;
+static int api28_symbols, usage_lookups, content_lookups, usage_calls, content_calls;
 static char last_log[256];
 static void pthread_mutex_lock(pthread_mutex_t *lock) { (void)lock; assert(!locked); locked = 1; }
 static void pthread_mutex_unlock(pthread_mutex_t *lock) { (void)lock; assert(locked); locked = 0; }
@@ -42,8 +45,21 @@ SETTER(setFormat, AAUDIO_FORMAT_PCM_I16)
 SETTER(setChannelCount, 2)
 SETTER(setSampleRate, 48000)
 SETTER(setPerformanceMode, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY)
-SETTER(setUsage, AAUDIO_USAGE_GAME)
-SETTER(setContentType, AAUDIO_CONTENT_TYPE_MUSIC)
+static void AAudioStreamBuilder_setUsage(AAudioStreamBuilder *b, aaudio_usage_t value) {
+    assert(locked && b && value == AAUDIO_USAGE_GAME && (api28_symbols & 1)); ++usage_calls;
+}
+static void AAudioStreamBuilder_setContentType(AAudioStreamBuilder *b, aaudio_content_type_t value) {
+    assert(locked && b && value == AAUDIO_CONTENT_TYPE_MUSIC && (api28_symbols & 2)); ++content_calls;
+}
+#define RTLD_DEFAULT ((void *)0)
+static void *dlsym(void *handle, const char *name) {
+    assert(locked && handle == RTLD_DEFAULT);
+    if (!strcmp(name, "AAudioStreamBuilder_setUsage")) {
+        ++usage_lookups; return api28_symbols & 1 ? (void *)AAudioStreamBuilder_setUsage : NULL;
+    }
+    assert(!strcmp(name, "AAudioStreamBuilder_setContentType"));
+    ++content_lookups; return api28_symbols & 2 ? (void *)AAudioStreamBuilder_setContentType : NULL;
+}
 static void AAudioStreamBuilder_delete(AAudioStreamBuilder *b) { assert(locked && b); }
 static aaudio_result_t AAudioStreamBuilder_openStream(AAudioStreamBuilder *b, AAudioStream **out) {
     assert(locked && b); if (open_fail) return -2;
@@ -93,8 +109,10 @@ static void signal_event(uint32_t event) { assert(event == 1); ++notifications; 
 /* PRODUCTION */
 
 int main(int argc, char **argv) {
-    assert(argc == 2);
+    assert(argc == 3);
     test_profile = argv[1];
+    api28_symbols = atoi(argv[2]);
+    assert(api28_symbols >= 0 && api28_symbols <= 3);
     assert(_putenv_s("VOID_DSOUND_TRACE", "") == 0 && !trace_enabled());
     char marker[1024];
     snprintf(marker, sizeof marker, "%s/dsound-trace", test_profile);
@@ -111,6 +129,7 @@ int main(int argc, char **argv) {
     audio_paused = 0;
     void_audio_output(pcm, 480);
     assert(creates == 1 && writes == 1 && stream && stream->started);
+    assert(usage_calls == !!(api28_symbols & 1) && content_calls == !!(api28_symbols & 2));
     for (unsigned i = 0; i < 30; ++i) {
         AAudioStream *previous = stream;
         int old_writes = writes, old_creates = creates;
@@ -202,6 +221,10 @@ int main(int argc, char **argv) {
     assert(!memcmp(GPTR(2048), GPTR(2304), 64));
     MEM32(2304) = 60;
     assert(lst_GetAllParameters() == DSERR_INVALIDPARAM && lst_SetAllParameters() == DSERR_INVALIDPARAM);
+    assert(usage_lookups == content_lookups && usage_lookups == creates + 1);
+    assert(usage_calls == ((api28_symbols & 1) ? usage_lookups : 0));
+    assert(content_calls == ((api28_symbols & 2) ? content_lookups : 0));
+    printf("PASS: optional API 28 audio attributes, symbol mask %d\n", api28_symbols);
     arguments[1] = 0;
     assert(lst_GetAllParameters() == DSERR_INVALIDPARAM && lst_SetAllParameters() == DSERR_INVALIDPARAM);
     puts("PASS: 30 pause/resume cycles, paused startup, disconnect/write/start/open failures, paced retry, partial-write levels; paused one-shot cursor/notifications; DS3DLISTENER layout, defaults, roundtrip, near/far PCM; profile-only trace marker and environment switch");
