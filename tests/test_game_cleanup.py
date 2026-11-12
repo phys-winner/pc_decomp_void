@@ -9,7 +9,7 @@ JAVA = Path(os.environ.get("JAVA_HOME", "")) / "bin"
 OUT = ROOT / "build/cleanup-test"
 OUT.mkdir(parents=True, exist_ok=True)
 sources = [ROOT / "android/app/src/org/thevoid/port" / name
-           for name in ("Zip.java", "Deflate64.java", "Unpacker.java", "GameCleanup.java")]
+           for name in ("Zip.java", "Deflate64.java", "WorkProgress.java", "Unpacker.java", "GameCleanup.java")]
 subprocess.run([str(JAVA / "javac.exe"), "--release", "8", "-encoding", "UTF-8", "-d", str(OUT),
                 *map(str, sources), str(ROOT / "tests/GameCleanupTest.java")], check=True)
 fixtures = []

@@ -1,5 +1,8 @@
 # Техдолг: Tension (2008)
 
+2026-11-09: both game editions received their requested animated Play-button
+palettes. This UI change did not change either native runtime.
+
 Здесь учитываются переносы из игры 2009 года (`libvoid.so`) в Tension 2008
 (`libvoid_tension.so`, `config/releases/tension.json`): что, где и как проверено.
 По запросу пользователя 2026-10-31 перенесены оставшиеся пункты 12, 15 и 16.
@@ -13,6 +16,25 @@
 константы в `generated/<выпуск>/release_overrides.h`. Файлы хоста называют подменённые
 функции и константы макросами (значения 2009 — под `#ifndef VOID_RELEASE`); подмена,
 двойника которой у выпуска нет, для него просто не компилируется.
+
+## Shared launcher and settings — 0.5-dev
+
+Both editions use the shared launcher, with separate installation paths and
+profiles, distinct activity identities and three in-game port-settings pages.
+The launcher language selects translated port labels and Unicode label fonts;
+original game dialogue retains the installed distribution's language. Progress,
+texture status and copyable diagnostics are available for both editions.
+
+Both runtimes honor the large-address-space option through consistent guest
+limits, PE flags and Win32 memory reports. Reused host subpages are zeroed and
+failed commits release reservations. Production VM/PE/Win32 checks cover both
+option states and 4/16 KiB branches, including the legacy negative control.
+
+Menus and hit regions fit narrow screens, captions wrap, and opening-video
+choices migrate independently per edition. All developer dialogs use an explicit
+dark Material theme. Selected Pixel 10/API 37 tests cover both real game UIs and
+four host-theme/day-night configurations. No game command was executed and all
+347 player-profile files remained unchanged. Items 23 and 24 below remain open.
 
 ## Открыто
 

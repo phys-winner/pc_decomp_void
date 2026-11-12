@@ -2,7 +2,6 @@ package org.thevoid.port;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.graphics.Color;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -236,25 +235,31 @@ final class DebugCommands {
         return help.toString();
     }
 
+    private static AlertDialog.Builder dialog(Activity activity) {
+        // Legacy game themes can give dialog windows and list rows incompatible defaults.
+        return new AlertDialog.Builder(activity, android.R.style.Theme_Material_Dialog_Alert);
+    }
+
     static void show(Activity activity, Consumer<String[]> execute) {
         if (Settings.legacyGame) { showLegacy(activity, execute); return; }
         AlertDialog[] owner = new AlertDialog[1];
         Consumer<String[]> dispatch = value -> { owner[0].dismiss(); execute.accept(value); };
         Consumer<String> single = value -> dispatch.accept(new String[] {value});
         String[] choices = categoryChoices();
-        ListView list = new ListView(activity);
-        list.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_list_item_1, choices));
+        AlertDialog.Builder builder = dialog(activity);
+        ListView list = new ListView(builder.getContext());
+        list.setAdapter(new ArrayAdapter<>(builder.getContext(), android.R.layout.simple_list_item_1, choices));
         list.setOnItemClickListener((parent, view, position, id) -> {
             if (position == choices.length - 1) { enterCommand(activity, single, "", ""); return; }
             String category = choices[position];
             String[] commands = commandsInCategory(category);
             String[] labels = new String[commands.length];
             for (int i = 0; i < commands.length; ++i) labels[i] = commandName(commands[i]);
-            new AlertDialog.Builder(activity).setTitle(category)
+            dialog(activity).setTitle(category)
                 .setItems(labels, (dialog, selected) -> command(activity, single, dispatch, commands[selected]))
                 .setNegativeButton(words("Back", "Назад", "Zurück", "Wstecz"), null).show();
         });
-        owner[0] = new AlertDialog.Builder(activity).setTitle(Settings.text(Settings.T_DEBUG_LIST))
+        owner[0] = builder.setTitle(Settings.text(Settings.T_DEBUG_LIST))
             .setView(list).setNegativeButton(words("Close", "Закрыть", "Schließen", "Zamknij"), null).create();
         owner[0].show();
     }
@@ -263,25 +268,25 @@ final class DebugCommands {
         AlertDialog[] owner = new AlertDialog[1];
         Consumer<String[]> dispatch = value -> { owner[0].dismiss(); execute.accept(value); };
         Consumer<String> single = value -> dispatch.accept(new String[] {value});
-        LinearLayout content = new LinearLayout(activity);
+        AlertDialog.Builder builder = dialog(activity);
+        LinearLayout content = new LinearLayout(builder.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
         int pad = Math.round(14 * activity.getResources().getDisplayMetrics().density);
         content.setPadding(pad, 0, pad, 0);
-        TextView label = new TextView(activity);
+        TextView label = new TextView(builder.getContext());
         label.setText(words("All commands (tap to select)", "Все команды (тап — выбор)",
             "Alle Befehle (zum Auswählen antippen)", "Wszystkie polecenia (dotknij, aby wybrać)"));
-        label.setTextColor(Color.WHITE);
         label.setPadding(0, pad / 2, 0, pad / 2);
         content.addView(label);
         String[] commands = commands();
         String[] labels = new String[commands.length];
         for (int i = 0; i < commands.length; ++i) labels[i] = commandName(commands[i]);
-        ListView list = new ListView(activity);
-        list.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_list_item_1, labels));
+        ListView list = new ListView(builder.getContext());
+        list.setAdapter(new ArrayAdapter<>(builder.getContext(), android.R.layout.simple_list_item_1, labels));
         list.setOnItemClickListener((parent, view, position, id) -> command(activity, single, dispatch, commands[position]));
         int height = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.48f);
         content.addView(list, new LinearLayout.LayoutParams(-1, height));
-        owner[0] = new AlertDialog.Builder(activity).setTitle(Settings.text(Settings.T_DEBUG_LIST))
+        owner[0] = builder.setTitle(Settings.text(Settings.T_DEBUG_LIST))
             .setView(content).setNegativeButton(words("Close", "Закрыть", "Schließen", "Zamknij"), null).create();
         owner[0].show();
     }
@@ -292,18 +297,18 @@ final class DebugCommands {
         String[] labels = new String[ids.length + extra.length];
         for (int i = 0; i < ids.length; ++i) labels[i] = Settings.gameText(15 + ids[i]) + "  (" + ids[i] + ")";
         System.arraycopy(extra, 0, labels, ids.length, extra.length);
-        new AlertDialog.Builder(activity).setTitle(words("Level selection", "Выбор уровня", "Level wählen", "Wybór poziomu"))
+        dialog(activity).setTitle(words("Level selection", "Выбор уровня", "Level wählen", "Wybór poziomu"))
             .setItems(labels, (d, which) -> selectLevel(which, execute))
             .setNegativeButton(words("Cancel", "Отмена", "Abbrechen", "Anuluj"), null).show();
     }
 
     private static void command(Activity activity, Consumer<String> execute, Consumer<String[]> route, String usage) {
-        new AlertDialog.Builder(activity).setTitle(commandName(usage)).setMessage(commandHelp(usage))
+        dialog(activity).setTitle(commandName(usage)).setMessage(commandHelp(usage))
             .setPositiveButton(usage.contains(" ") ? words("Choose parameters", "Выбрать параметры", "Parameter wählen", "Wybierz parametry")
                 : words("Execute", "Выполнить", "Ausführen", "Wykonaj"), (d, which) -> {
                 if (usage.startsWith("/go ")) { showLevels(activity, route); return; }
                 if (usage.equals(PHYSICS_COMMAND)) {
-                    new AlertDialog.Builder(activity).setTitle(commandName(usage))
+                    dialog(activity).setTitle(commandName(usage))
                         .setItems(new String[] {words("Show", "Показать", "Anzeigen", "Pokaż"),
                             words("Hide", "Скрыть", "Ausblenden", "Ukryj")},
                             (dialog, selected) -> execute.accept("setvar show_physics " + (selected == 0 ? "1" : "0")))
@@ -330,7 +335,7 @@ final class DebugCommands {
             else if (parameter.equals("color") && !usage.startsWith("/realm "))
                 labels[i] = Settings.gameText(Integer.parseInt(values[i]));
         }
-        new AlertDialog.Builder(activity).setTitle(commandName(usage) + " · " + parameterName(parameter))
+        dialog(activity).setTitle(commandName(usage) + " · " + parameterName(parameter))
             .setItems(labels, (d, which) -> argument(activity, execute, usage, parts,
                 values[which].isEmpty() ? parts.length : index + 1, command + (values[which].isEmpty() ? "" : " " + values[which])))
             .setNeutralButton(words("Enter command…", "Ввести команду…", "Befehl eingeben…", "Wpisz polecenie…"),
@@ -388,12 +393,13 @@ final class DebugCommands {
     }
 
     private static void enterCommand(Activity activity, Consumer<String> execute, String usage, String initialValue) {
-        EditText input = new EditText(activity);
+        AlertDialog.Builder builder = dialog(activity);
+        EditText input = new EditText(builder.getContext());
         input.setSingleLine(true);
         input.setText(initialValue);
         input.setHint(usage.isEmpty() ? words("Command", "Команда", "Befehl", "Polecenie") : usage);
         input.setSelection(input.length());
-        AlertDialog dialog = new AlertDialog.Builder(activity)
+        AlertDialog dialog = builder
             .setTitle(usage.isEmpty() ? words("Enter command", "Ввод команды", "Befehl eingeben", "Wpisz polecenie") : commandName(usage)).setView(input)
             .setPositiveButton(words("Execute", "Выполнить", "Ausführen", "Wykonaj"), null)
             .setNegativeButton(words("Cancel", "Отмена", "Abbrechen", "Anuluj"), null).create();
@@ -425,7 +431,7 @@ final class DebugCommands {
     }
 
     private static String language() {
-        return (Settings.gameLanguage.isEmpty() ? Locale.getDefault().getLanguage() : Settings.gameLanguage).toLowerCase(Locale.ROOT);
+        return Settings.language();
     }
 
     private static String words(String en, String ru, String de, String pl) {

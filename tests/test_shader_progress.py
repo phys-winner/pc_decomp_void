@@ -69,8 +69,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix="fixtures-", dir=OUT) as fixtures:
         subprocess.run([str(JAVA / "java.exe"), "-ea", "-cp", str(OUT / "installer"),
                         "org.thevoid.port.ShaderCacheInstallTest", fixtures], check=True)
-    sources = sorted((ROOT / "android/app/src").rglob("*.java"))
-    subprocess.run([str(JAVA / "javac.exe"), "--release", "8", "-encoding", "UTF-8", "-cp", str(ANDROID),
+    sys.path.insert(0, str(ROOT / "tools"))
+    from build_game_apk import prepare_launcher, ANDROID_JAR
+    prepared = prepare_launcher(OUT / "launcher")
+    sources = sorted((ROOT / "android/app/src").rglob("*.java")) + [Path(p) for p in prepared["sources"]]
+    subprocess.run([str(JAVA / "javac.exe"), "--release", "8", "-encoding", "UTF-8", "-cp", str(ANDROID_JAR),
                     "-d", str(OUT / "app"), *map(str, sources)], check=True)
     print("PASS: all Android Java sources compile with the real Android API")
     native_lookup()

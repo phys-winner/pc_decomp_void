@@ -6,7 +6,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from gscript_binary import Module
-from patch_options import ARROW, Check, Slider, Sites, TEXTS, arrow_position, function, pages, patch_options
+from patch_options import ARROW, DESIGN_WIDTH, Check, Slider, Sites, TEXTS, arrow_position, function, menu_scale_slot, pages, patch_options
 from patch_scripts import INDEXES, arrow_mask, dds_rgba, enlarged, read_entry
 from PIL import Image
 
@@ -21,11 +21,12 @@ def arrow_clearance(original, instructions, index):
         arrow_position(assembly, side)
         assembly.emit(65)
         start = function(module, assembly, 10)
-        for aspect in (16 / 9, 20 / 9, 21 / 9):
-            _, registers = VM(module, named={'Width': 1200 * aspect, 'Height': 1200,
+        for aspect in (4 / 3, 1680 / 1264, 16 / 10, 16 / 9, 20 / 9, 21 / 9):
+            menu_scale = min(1, 1200 * aspect / DESIGN_WIDTH)
+            _, registers = VM(module, {menu_scale_slot(module): menu_scale}, named={'Width': 1200 * aspect, 'Height': 1200,
                                              '!vec2': lambda x, y: (x, y)}).run(start)
             x, y = registers[4]
-            half_width = 600 * aspect
+            half_width = 600 * aspect / menu_scale
             assert abs((x if side == 0 else half_width - x - ARROW['width'])
                        - (-half_width + ARROW['inset'] if side == 0 else ARROW['inset'])) < 1e-6
             assert y == ARROW['width'] / 2
@@ -39,11 +40,13 @@ def arrow_clearance(original, instructions, index):
                 bbox = Image.frombytes('RGBA', (width, height), pixels).getchannel('A').getbbox()
                 scale = ARROW['width'] / width
                 assert -half_width <= x + bbox[0] * scale <= x + bbox[2] * scale <= half_width
-                assert -600 <= -y + bbox[1] * scale <= -y + bbox[3] * scale <= 600
+                assert -600 / menu_scale <= -y + bbox[1] * scale <= -y + bbox[3] * scale <= 600 / menu_scale
     # The constructors must use the dynamic position rather than fixed 16:9 offsets.
     for i, row in enumerate(instructions):
         if row.get('text') not in ('ui/port_arrow_left', 'ui/port_arrow_right'): continue
-        assert [r.get('symbol') for r in instructions[i + 1:i + 6] if r.get('symbol')] == ['!vec2', 'Width', 'Height']
+        assert [r.get('symbol') for r in instructions[i + 1:i + 6] if r.get('symbol')] == ['!vec2', 'Width']
+        assert any(r['opcode'] == 14 and r['register'] == menu_scale_slot(original)
+                   for r in instructions[i + 1:i + 6])
 
 for index, lang in INDEXES.items():
     if lang == "pl": continue  # the early release uses the Java settings panel

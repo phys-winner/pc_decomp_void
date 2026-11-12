@@ -16,13 +16,15 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.io.File;
+import org.thevoid.port.launcher.Launch;
 
 /**
  * The Void on Android: a SurfaceView the lifted game renders into through EGL,
  * with the touch layer (Controls) on top, which produces the original
  * keyboard (DirectInput scan codes) and mouse input.
  */
-public final class GameActivity extends Activity implements SurfaceHolder.Callback {
+public class GameActivity extends Activity implements SurfaceHolder.Callback {
+    private Launch launch;
     /* The native library is loaded once the release is known (chooseRelease):
      * the 2009 releases (English, Russian, German) run libvoid.so, the 2008
      * Polish "Tension" its own lifted build, libvoid_tension.so. */
@@ -123,6 +125,15 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        launch = Launch.attach(this);
+        Settings.portLanguage = launch.language();
+        if (running) {
+            restart();
+            finish();
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33)
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::onBackPressed);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         /* The volume keys set the game's volume, not the ringer's, also
@@ -131,9 +142,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         hideSystemUi();
         /* The launcher's folder (its extra, else the one it chose last; tools
          * start this activity directly). Without a game, the launcher. */
-        File game = Launcher.chosenGame(this, getIntent());
-        if (game == null) {
-            startActivity(new Intent(this, Launcher.class));
+        File game = getIntent().hasExtra(Launch.EXTRA_DISTRIBUTION) ? launch.folder("game") : Launcher.chosenGame(this, getIntent());
+        if (game == null) game = launch.folder("game");
+        if (game == null || !Unpacker.isVoid(game)) {
+            Launch.openLauncher(this, launch.distribution());
             finish();
             return;
         }
@@ -192,6 +204,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private void start(Release release) {
         android.util.Log.i("TheVoid", "game: " + release.label() + " in " + release.dir);
         settings = new Settings(this);
+        try { settings.fpsLimit = Math.max(0, Integer.parseInt(launch.option("fps_limit"))); }
+        catch (NumberFormatException e) { android.util.Log.w("TheVoid", "invalid frame limit", e); }
         Settings.gameLanguage = release.language;
         Settings.legacyGame = release.library.equals("void_tension");
         /* The picture fills the display, the camera cutout too (the columns
@@ -226,7 +240,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         preparationPanel.post(preparationTick);
         preparation = new Thread(() -> {
             try {
-                Profile.migrate(new File(Launcher.baseDir(), data.getName()), data);
+                android.system.Os.setenv("PORT_OPTION_LARGE_ADDRESS_AWARE", launch.option("large_address_aware"), true);
+                Profile.migrateGame(Launcher.baseDir(), release.dir, data.getName());
                 if (!data.isDirectory() && !data.mkdirs()) throw new java.io.IOException("cannot create " + data);
                 if (!libraryLoaded) {
                     /* Unpacked from the APK on the first start of a build; a pushed
@@ -252,7 +267,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                     preparation = null;
                     startPrepared(release, data, root, overrides, images);
                 });
-            } catch (java.io.IOException | LinkageError e) {
+            } catch (java.io.IOException | LinkageError | android.system.ErrnoException e) {
                 android.util.Log.e("TheVoid", "startup preparation failed", e);
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
@@ -284,7 +299,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
          * pages of the port's settings, skipping the opening videos, the
          * head bobbing switch): with the menu, the game's Settings hold the
          * port's settings; the layer only makes sure they all exist. */
-        boolean nativeMenu = !release.library.equals("void_tension") && overrides.contains("Scripts\\ui\\main_menu.bin");
+        boolean nativeMenu = overrides.contains("Scripts\\ui\\main_menu.bin");
         File gameSettings = new File(data, "overrides/settings.xml");
         Profile.ensureSettings(new File(release.dir, "data/settings.xml"), gameSettings, settings.gameProps());
         if (nativeMenu) {
@@ -301,6 +316,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         } else {
             Profile.setProps(gameSettings, settings.gameProps());
         }
+        settings.skipIntro = launch.skipIntro();
+        Profile.setProps(gameSettings, java.util.Collections.singletonMap("PortSkipIntro", settings.skipIntro ? "1" : "0"));
         settings.save();
         /* Runtime input mode must never overwrite the player's touch preference. */
         Profile.setProps(gameSettings, java.util.Collections.singletonMap("PortTouchInput", settings.touchAdaptations ? "1" : "0"));
@@ -383,6 +400,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         nativeSetReflections(settings.reflections);
         android.util.Log.i("TheVoid", "display refresh up to " + hz + " Hz");
         bindCompileService(release, data, images);
+        launch.starting();
         started = running = nativeStart(release.dir.getAbsolutePath(), data.getAbsolutePath(),
                 images.getAbsolutePath(), new File(getFilesDir(), "shadercache").getAbsolutePath(),
                 game[0], game[1], new File(base, "verbose").exists());
@@ -390,6 +408,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             preparationFailed = true;
             String title = startupText("Could not start the game", "Не удалось запустить игру",
                 "Das Spiel konnte nicht gestartet werden", "Nie można uruchomić gry");
+            launch.failed(title);
             preparationPanel.update(title, "", 0, 0);
             preparationPanel.removeCallbacks(preparationTick);
             controls.pause();
@@ -422,6 +441,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 android.util.Log.w("TheVoid", "scene shader unavailable: " + Long.toHexString(missing));
             }
             long hud = nativeHudState();
+            if ((hud >>> 32) != 0) launch.firstFrame((FrameLayout)controls.getParent());
             long progress = nativeShaderProgress(), warmup = nativeShaderWarmup();
             boolean menu = (hud & 0x100000) != 0;
             if (!startupReady && (hud & (0x2000 | 0x100000)) != 0) {
@@ -491,7 +511,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
 
     private static String startupText(String en, String ru, String de, String pl) {
-        String language = Settings.gameLanguage.toLowerCase(java.util.Locale.ROOT);
+        String language = Settings.portLanguage.toLowerCase(java.util.Locale.ROOT);
         if (language.isEmpty()) language = java.util.Locale.getDefault().getLanguage();
         return language.startsWith("ru") || language.equals("uk") || language.equals("be") ? ru
             : language.startsWith("de") || language.startsWith("german") ? de
@@ -548,12 +568,20 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
      *  this one and opens the game again. */
     void restart() { restart(false); }
 
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        restart();
+    }
+
     private void restart(boolean launcher) {
         android.content.Intent i = new android.content.Intent(this, RestartActivity.class);
         i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
         i.putExtra(RestartActivity.PID, android.os.Process.myPid());
         i.putExtra(RestartActivity.LAUNCHER, launcher);
         if (getIntent() != null) {
+            i.putExtra(Launch.EXTRA_DISTRIBUTION, getIntent().getStringExtra(Launch.EXTRA_DISTRIBUTION) != null
+                ? getIntent().getStringExtra(Launch.EXTRA_DISTRIBUTION) : launch.distribution());
             i.putExtra(Launcher.EXTRA_GAME, getIntent().getStringExtra(Launcher.EXTRA_GAME));
             i.putExtra("userdata", getIntent().getStringExtra("userdata"));
         }

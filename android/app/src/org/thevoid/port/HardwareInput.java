@@ -313,8 +313,7 @@ final class HardwareInput implements InputManager.InputDeviceListener {
     @Override public void onInputDeviceChanged(int id) { }
 
     private static String language() {
-        String language = Settings.gameLanguage.toLowerCase(java.util.Locale.ROOT);
-        return language.isEmpty() ? java.util.Locale.getDefault().getLanguage() : language;
+        return Settings.language();
     }
 
     static String helpTitle() {

@@ -19,7 +19,7 @@ activity = (port / "GameActivity.java").read_text(encoding="utf-8")
 assert "base = game;" in method(activity, "@Override protected void onCreate(Bundle state)")
 assert 'File data = new File(base, userdata);' in method(activity, "private void start(Release release)")
 prepare = method(activity, "private void prepareAssets(")
-assert prepare.index("Profile.migrate(new File(Launcher.baseDir(), data.getName()), data)") < prepare.index("ScriptOverrides.install(")
+assert prepare.index("Profile.migrateGame(Launcher.baseDir(), release.dir, data.getName())") < prepare.index("ScriptOverrides.install(")
 assert 'new File(base, "userdata/overrides/settings.xml")' in launcher
 
 probe = OUT / "ProfileStorageProbe.java"

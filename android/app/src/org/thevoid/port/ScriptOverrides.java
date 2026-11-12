@@ -35,10 +35,13 @@ final class ScriptOverrides {
             Map<String, Map<String, long[]>> archives = new HashMap<>();
             Map<String, String> originals = new HashMap<>();   /* path -> the release's SHA-256 */
             Set<String> paths = new HashSet<>(), sources = new HashSet<>();
+            Set<String> localized = new HashSet<>();
             for (int i = 0; i < index.length(); ++i) {
                 JSONObject e = index.getJSONObject(i);
                 paths.add(e.getString("path"));
                 sources.add(e.optString("source", e.getString("path")));
+                if (Settings.portLanguage.equals(e.optString("ui_language", "")) && !Settings.portLanguage.isEmpty())
+                    localized.add(e.getString("original_sha256") + e.getString("path"));
             }
             /* A new file made from one of the release's (a larger image) is
              * keyed by that file, its "source". */
@@ -69,6 +72,9 @@ final class ScriptOverrides {
                 JSONObject e = index.getJSONObject(i);
                 String path = e.getString("path");
                 if (!e.getString("original_sha256").equals(originals.get(e.optString("source", path)))) continue;
+                String language = e.optString("ui_language", "");
+                if (language.isEmpty() && localized.contains(e.getString("original_sha256") + path)) continue;
+                if (!language.isEmpty() && !language.equals(Settings.portLanguage)) continue;
                 File out = new File(root, path.replace('\\', '/'));
                 byte[] patched = asset(c, "overrides/" + e.getString("file"));
                 if (!out.isFile() || !sha256(readAll(out)).equals(sha256(patched))) {

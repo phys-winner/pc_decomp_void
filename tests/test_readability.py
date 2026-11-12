@@ -264,7 +264,7 @@ def fixed_port_labels(index, lang):
                                  if r['offset'] > methods['setLabelText'] and r['opcode'] == 8)
                 _, refresh = vm.run(methods['setLabelText'], {-5: 0, -4: '150 %'}, stops=(dead_init,))
                 vm.run(dead_init + 4, refresh)
-                assert seen == ['fontmain_%d.ft' % expected_size] * 2, (lang, height, percent, size, seen)
+                assert seen == ['portfont_%d.ft' % expected_size] * 2, (lang, height, percent, size, seen)
                 # The same original methods keep increasing ordinary menu
                 # labels once, both at creation and on value/text refresh.
                 vm.run(start, {0: Vector(), -7: 'ordinary', -6: 'position', -5: 0, -4: size})
@@ -290,11 +290,13 @@ def fixed_port_labels(index, lang):
                     px = max(8, int((40 if title else 26) * screen_scale))
                     px = min(28, px)
                     _, glyphs = metrics(px)
-                    advance = width = 0
-                    for char in text:
-                        ink, _, _, step = glyphs[char]
-                        width = max(width, advance + ink)
-                        advance += step
+                    width = 0
+                    for line in text.splitlines():
+                        advance = 0
+                        for char in line:
+                            ink, _, _, step = glyphs[char]
+                            width = max(width, advance + ink)
+                            advance += step
                     x = (-820 if side == 0 else 120) + (0 if title else 184 if side == 0 else 224)
                     limit = (120 if side == 0 else 1200 * 8 / 9) - x
                     assert width + 4 <= limit * screen_scale, (lang, height, text, width, limit * screen_scale)

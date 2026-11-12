@@ -49,7 +49,7 @@ public final class TextureService extends Service {
             }
             long[] p = job.progress();
             builder.setProgress(1000, (int) (p[3] * 1000 / Math.max(1, p[4])), p[0] == Textures.SCANNING)
-                .setContentText(Launcher.fmt(Launcher.T_TEX_PROGRESS, p[1], p[2]));
+                .setContentText(job.meter.describe(java.util.Locale.getDefault().getLanguage(), true, p[3], p[4], p[1], p[2]).replace('\n', ' '));
             notifications.notify(PROGRESS, builder.build());
             handler.postDelayed(this, 1000);
         }

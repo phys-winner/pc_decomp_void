@@ -1,6 +1,12 @@
 package org.thevoid.port;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
+import android.graphics.Path;
+import android.graphics.Shader;
+import android.os.SystemClock;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
@@ -17,6 +23,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
@@ -26,13 +33,14 @@ import android.provider.OpenableColumns;
 import android.system.Os;
 import android.view.Gravity;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -54,10 +62,19 @@ public final class Launcher extends Activity {
     private static final int ASK_ARCHIVE = 1, ASK_TARGET = 2, ASK_FOLDER = 3, ASK_STORAGE = 4;
     private static final String EXTERNAL = "com.android.externalstorage.documents",
         DOWNLOADS = "com.android.providers.downloads.documents";
-    private static final int GOLD = Color.rgb(255, 205, 50), GOLD_DARK = Color.rgb(170, 125, 20),
-        CELL = Color.rgb(50, 50, 60), GREY = Color.rgb(165, 165, 178), RED = Color.rgb(255, 125, 110);
+    private static final int GOLD = 0xFFFFCD32, GOLD_DARK = 0xFFAA7D14,
+        CELL = 0xFF32323C, GREY = 0xFFA5A5B2, RED = 0xFFFF7D6E;
     /** On the screen: UnpackService tells the end of an unpacking in a notification otherwise. */
     static volatile boolean visible;
+
+    static boolean largeAddressAware(Context context) {
+        if (!android.os.Process.is64Bit()) return false;
+        android.app.ActivityManager manager = (android.app.ActivityManager)context.getSystemService(Context.ACTIVITY_SERVICE);
+        android.app.ActivityManager.MemoryInfo memory = new android.app.ActivityManager.MemoryInfo();
+        if (manager != null) manager.getMemoryInfo(memory);
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean("large_address_aware", memory.totalMem >= (5L << 30));
+    }
 
     private SharedPreferences prefs;
     private Settings settings;
@@ -74,12 +91,16 @@ public final class Launcher extends Activity {
     private GameCleanup.Plan cleanupPlan;
     private int cleanupGeneration;
 
-    private TextView gameTitle, gamePath, note, progressTarget, progressText;
-    private LinearLayout copies;
+    private TextView gameTitle, gamePath, note, progressTarget, progressText, texNote, cleanupNote, playNote, busyNote;
+    private TextView filesHeading, texHeading, texSupport, texState, diagnosticNote, diagnosticButton;
+    private boolean copyingDiagnostics;
+    private final Map<TextView, LinearLayout> recoveryActions = new HashMap<>();
+    private LinearLayout copies, fileDetails, texDetails;
+    private boolean filesExpanded, texturesExpanded;
     private ProgressBar progress;
     private View progressBox, permissionBox, optionsBox, play, archiveButton, folderButton, stopButton;
     private TextView cleanupButton;
-    private FrameLayout skipBox, fpsBox;
+    private FrameLayout skipBox, fpsBox, memoryBox;
     /* The chosen folder is a game folder the app can read: its textures can be converted. */
     private boolean gameFolder;
     /* Textures (Textures.java): the GPU's DXT support and the conversion. */
@@ -103,6 +124,10 @@ public final class Launcher extends Activity {
         base = baseDir();
         getWindow().setStatusBarColor(Color.rgb(16, 26, 37));
         getWindow().setNavigationBarColor(Color.rgb(3, 5, 8));
+        if (state != null) {
+            filesExpanded = state.getBoolean("filesExpanded");
+            texturesExpanded = state.getBoolean("texturesExpanded");
+        }
         build();
         if (!storage()) askStorage();
         refresh();
@@ -127,6 +152,12 @@ public final class Launcher extends Activity {
     @Override protected void onPause() {
         visible = false;
         super.onPause();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putBoolean("filesExpanded", filesExpanded);
+        state.putBoolean("texturesExpanded", texturesExpanded);
     }
 
     @Override protected void onDestroy() {
@@ -169,6 +200,8 @@ public final class Launcher extends Activity {
         game = root;
         prefs.edit().putString("game", root.getAbsolutePath()).apply();
         note(null, false);
+        note(texNote, null, false);
+        note(cleanupNote, null, false);
         refresh();
     }
 
@@ -364,7 +397,8 @@ public final class Launcher extends Activity {
         if (job != null) {
             progressTarget.setText(job.target.getPath());
             progress.setProgress((int) (job.done * 1000 / Math.max(1, job.plan.size)));
-            progressText.setText(progressText(job.done, job.plan.size) + (job.file.isEmpty() ? "" : " · " + job.file));
+            progressText.setText(job.meter.describe(Locale.getDefault().getLanguage(), false, job.done, job.plan.size,
+                job.itemsDone, job.plan.files.size()) + (job.file.isEmpty() ? "" : "\n" + job.file));
             stopButton.setEnabled(!job.cancelled);
         }
         enable();
@@ -377,12 +411,12 @@ public final class Launcher extends Activity {
         showProgress(null);
         if (job.failure == null) {
             select(job.target);
+            note(text(T_UNPACKED_TITLE), false);
             askDelete(job);
         } else if (job.failure.code == Unpacker.CANCELLED) {
             note(text(T_STOPPED), false);
         } else {
-            dialog().setTitle(text(T_FAILED_TITLE)).setMessage(describe(job.failure))
-                .setPositiveButton(text(T_OK), null).show();
+            error(describe(job.failure));
         }
     }
 
@@ -410,7 +444,7 @@ public final class Launcher extends Activity {
                 }
                 if (!deleted && job.sourceFile != null) deleted = job.sourceFile.delete() || !job.sourceFile.exists();
                 android.util.Log.i("TheVoid", "launcher: archive " + name + (deleted ? " deleted" : " not deleted"));
-                Toast.makeText(this, text(deleted ? T_DELETED : T_NOT_DELETED), Toast.LENGTH_LONG).show();
+                note(text(deleted ? T_DELETED : T_NOT_DELETED), !deleted);
             })
             .setNegativeButton(text(T_KEEP), null)
             .show();
@@ -433,18 +467,18 @@ public final class Launcher extends Activity {
     private void play() {
         if (game == null || Unpacker.current != null || busy != null) return;
         if (!Unpacker.isRoot(game) || !Unpacker.isVoid(game)) {
-            error(text(E_FOLDER));
+            note(playNote, text(E_FOLDER), true);
             game = null;
             refresh();
             return;
         }
         GameActivity.Release release = new GameActivity.Release(game);
         if (!NativeLibrary.available(this, release.library)) {
-            error(fmt(E_LIBRARY, release.label()));
+            note(playNote, fmt(E_LIBRARY, release.label()), true);
             return;
         }
         if (!Images.available(this, base, release.images)) {
-            error(fmt(E_IMAGES, release.images));
+            note(playNote, fmt(E_IMAGES, release.images), true);
             return;
         }
         prefs.edit().putString("game", game.getAbsolutePath()).apply();
@@ -494,6 +528,8 @@ public final class Launcher extends Activity {
                 texScanning = null;
                 texGpu = gpu;
                 texStatus = status;
+                if (status.failure != null)
+                    note(texNote, text(status.failure.equals("libtexconv.so") ? T_TEX_UNAVAILABLE : T_TEX_UNREADABLE), true);
                 enable();
             });
         }, "textures-scan").start();
@@ -503,10 +539,18 @@ public final class Launcher extends Activity {
         Textures.Job job = Textures.current;
         boolean running = job != null && !job.finished;
         Textures.Status st = texStatus;
-        texBox.setVisibility(game != null && gameFolder && (running || (st != null && texGpu != null)) ? View.VISIBLE : View.GONE);
+        texBox.setVisibility(game != null && gameFolder && (running || texNote.getVisibility() == View.VISIBLE
+            || (st != null && texGpu != null)) ? View.VISIBLE : View.GONE);
         texProgressBox.setVisibility(running ? View.VISIBLE : View.GONE);
         boolean scanned = st != null && game != null && game.equals(st.game);
         boolean native_ = texGpu != null && texGpu.s3tc;
+        texDetails.setVisibility(texturesExpanded && !running ? View.VISIBLE : View.GONE);
+        texHeading.setText((texturesExpanded ? "▾ " : "▸ ") + text(T_TEX_TITLE).toUpperCase(Locale.getDefault()));
+        texSupport.setText(texGpu == null || !texGpu.probed ? text(T_TEX_UNKNOWN) : text(native_ ? T_TEX_FULL : T_TEX_RECOMMEND));
+        texSupport.setTextColor(texGpu == null || !texGpu.probed ? GREY : native_ ? Color.rgb(159, 213, 154) : GOLD);
+        texState.setText(!scanned || texScanning != null ? text(T_TEX_SCANNING)
+            : st.failure != null ? text(T_TEX_CHECK_FAILED) : st.converted == 0 ? text(T_TEX_ORIGINALS)
+            : fmt(T_TEX_STATUS, st.converted == Textures.ASTC ? "ASTC" : "ETC2") + (st.current ? "" : " · " + text(T_TEX_OUTDATED)));
         StringBuilder info = new StringBuilder();
         if (texGpu != null) {
             info.append(fmt(T_TEX_GPU, texGpu.renderer.isEmpty() ? "?" : texGpu.renderer)).append(' ');
@@ -536,7 +580,7 @@ public final class Launcher extends Activity {
             texProgress.setIndeterminate(p[0] == Textures.SCANNING);
             texProgress.setProgress((int) (p[3] * 1000 / Math.max(1, p[4])));
             texProgressText.setText(p[0] == Textures.SCANNING ? text(T_TEX_SCANNING) : p[0] == Textures.FINISHING
-                ? text(T_TEX_FINISHING) : fmt(T_TEX_PROGRESS, p[1], p[2]) + " · " + progressText(p[3], p[4]));
+                ? text(T_TEX_FINISHING) : job.meter.describe(Locale.getDefault().getLanguage(), true, p[3], p[4], p[1], p[2]));
             setEnabled(texStop, !job.cancelled);
         }
     }
@@ -546,7 +590,7 @@ public final class Launcher extends Activity {
         if (st == null || game == null || Unpacker.current != null || Textures.current != null && !Textures.current.finished) return;
         long need = format == Textures.ASTC ? st.estimateAstc : st.estimateEtc2;
         if (st.free >= 0 && st.free < need + (64L << 20)) {
-            error(fmt(T_TEX_SPACE, size(need), size(st.free)));
+            note(texNote, fmt(T_TEX_SPACE, size(need), size(st.free)), true);
             return;
         }
         final File target = game;
@@ -569,6 +613,7 @@ public final class Launcher extends Activity {
 
     private void startTextures(File target, int format) {
         if (Textures.start(this, target, format) == null) return;
+        note(texNote, null, false);
         android.util.Log.i("TheVoid", "launcher: textures " + (format == 0 ? "removed" : format == Textures.ASTC ? "to ASTC" : "to ETC2")
             + " in " + target);
         texStatus = null;
@@ -595,9 +640,10 @@ public final class Launcher extends Activity {
             if (!visible) return;   /* TextureService told it; onResume takes it */
             Textures.current = null;
             TextureService.cancelResult(Launcher.this);
-            if (job.cancelled) note(text(T_TEX_STOPPED), false);
-            else if (job.failure != null) error(text(T_TEX_FAILED) + ": " + job.failure);
-            else if (job.format != 0) note(fmt(T_TEX_DONE_TIME, (System.currentTimeMillis() - job.started + 500) / 1000), false);
+            if (job.cancelled) note(texNote, text(T_TEX_STOPPED), false);
+            else if (job.failure != null) note(texNote, text(T_TEX_FAILED) + ": " + job.failure, true);
+            else note(texNote, job.format == 0 ? text(T_DELETED)
+                : fmt(T_TEX_DONE_TIME, (System.currentTimeMillis() - job.started + 500) / 1000), false);
             texScanning = null;
             refreshTextures();
         }
@@ -628,7 +674,7 @@ public final class Launcher extends Activity {
     private void scanCleanup() {
         if (game == null || busy != null || Unpacker.current != null) return;
         final File selected = game;
-        setBusy(text(T_CLEAN_SCAN));
+        setBusy(cleanupNote, text(T_CLEAN_SCAN));
         new Thread(() -> {
             GameCleanup.Plan plan = null;
             String failure = null;
@@ -639,10 +685,10 @@ public final class Launcher extends Activity {
             handler.post(() -> {
                 setBusy(null);
                 if (isFinishing() || isDestroyed()) return;
-                if (problem != null) { error(problem); return; }
+                if (problem != null) { note(cleanupNote, problem, true); return; }
                 cleanupPlan = found;
                 enable();
-                if (found.files.isEmpty()) { note(text(T_CLEAN_EMPTY), false); return; }
+                if (found.files.isEmpty()) { note(cleanupNote, text(T_CLEAN_EMPTY), false); return; }
                 StringBuilder list = new StringBuilder(fmt(T_CLEAN_PREVIEW, found.root, found.files.size(), size(found.bytes)));
                 for (GameCleanup.Entry file : found.files)
                     list.append('\n').append(file.file.getAbsolutePath().substring(found.root.getAbsolutePath().length() + 1))
@@ -662,7 +708,7 @@ public final class Launcher extends Activity {
         ++cleanupGeneration;
         cleanupScanning = null;
         cleanupPlan = null;
-        setBusy(text(T_CLEAN_BUSY));
+        setBusy(cleanupNote, text(T_CLEAN_BUSY));
         new Thread(() -> {
             long bytes = 0;
             String failure = null;
@@ -673,7 +719,7 @@ public final class Launcher extends Activity {
             handler.post(() -> {
                 setBusy(null);
                 if (isFinishing() || isDestroyed()) return;
-                if (problem != null) error(problem); else note(fmt(T_CLEAN_DONE, size(freed)), false);
+                note(cleanupNote, problem != null ? problem : fmt(T_CLEAN_DONE, size(freed)), problem != null);
                 refreshCleanup();
             });
         }, "cleanup").start();
@@ -850,8 +896,16 @@ public final class Launcher extends Activity {
         head.addView(title);
         column.addView(head, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout card = card(column);
-        card.addView(heading(text(T_GAME)));
+        LinearLayout fileCard = card(column);
+        filesHeading = heading("");
+        filesHeading.setMinHeight(dp(48));
+        filesHeading.setFocusable(true);
+        filesHeading.setOnClickListener(v -> { filesExpanded = !filesExpanded; enable(); });
+        fileCard.addView(filesHeading);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        fileDetails = card;
+        fileCard.addView(card);
         gameTitle = label("", 18, Color.WHITE);
         gameTitle.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(gameTitle);
@@ -873,7 +927,9 @@ public final class Launcher extends Activity {
         copies.setOrientation(LinearLayout.VERTICAL);
         card.addView(copies);
 
-        LinearLayout box = card(column);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        fileCard.addView(box);
         progressBox = box;
         box.addView(heading(text(T_UNPACKING_TITLE)));
         progressTarget = label("", 13, GREY);
@@ -889,20 +945,41 @@ public final class Launcher extends Activity {
         stop.setMargins(0, dp(10), 0, 0);
         box.addView(stopButton, stop);
         progressBox.setVisibility(View.GONE);
+        note = status(fileCard);
 
         LinearLayout options = card(column);
         optionsBox = options;
         skipBox = new FrameLayout(this);
         options.addView(skipBox);
+        memoryBox = new FrameLayout(this);
+        options.addView(memoryBox);
         fpsBox = new FrameLayout(this);
         options.addView(fpsBox);
         cleanupButton = button(text(T_CLEAN), false, this::scanCleanup);
         cleanupButton.setVisibility(View.GONE);
         options.addView(cleanupButton, new LinearLayout.LayoutParams(-1, dp(48)));
+        cleanupNote = status(options);
 
-        LinearLayout tex = card(column);
-        texBox = tex;
-        tex.addView(heading(text(T_TEX_TITLE)));
+        LinearLayout texCard = card(column);
+        texBox = texCard;
+        LinearLayout texHeader = new LinearLayout(this);
+        texHeader.setGravity(Gravity.CENTER_VERTICAL);
+        texHeader.setMinimumHeight(dp(48));
+        texHeading = heading("");
+        texHeader.addView(texHeading);
+        texSupport = label("", 13, GREY);
+        texSupport.setGravity(Gravity.END);
+        texSupport.setPadding(dp(8), 0, 0, 0);
+        texHeader.addView(texSupport, new LinearLayout.LayoutParams(0, -2, 1));
+        texHeader.setFocusable(true);
+        texHeader.setOnClickListener(v -> { texturesExpanded = !texturesExpanded; enable(); });
+        texCard.addView(texHeader);
+        texState = label("", 13, GREY);
+        texCard.addView(texState);
+        LinearLayout tex = new LinearLayout(this);
+        tex.setOrientation(LinearLayout.VERTICAL);
+        texDetails = tex;
+        texCard.addView(tex);
         texInfo = label("", 14, Color.WHITE);
         tex.addView(texInfo);
         texAstc = button(text(T_TEX_ASTC), false, () -> askConvert(Textures.ASTC));
@@ -927,7 +1004,8 @@ public final class Launcher extends Activity {
         texStopLp.setMargins(0, dp(8), 0, 0);
         texRun.addView(texStop, texStopLp);
         texRun.setVisibility(View.GONE);
-        tex.addView(texRun);
+        texCard.addView(texRun);
+        texNote = status(texCard);
 
         LinearLayout permission = card(column);
         permissionBox = permission;
@@ -936,15 +1014,18 @@ public final class Launcher extends Activity {
         allow.setMargins(0, dp(10), 0, 0);
         permission.addView(button(text(T_ALLOW), false, this::askStorage), allow);
 
-        note = label("", 14, GOLD);
-        note.setPadding(dp(4), dp(12), dp(4), 0);
-        note.setVisibility(View.GONE);
-        column.addView(note);
-
+        LinearLayout launch = card(column);
+        playNote = status(launch);
         play = button(text(T_PLAY), true, this::play);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(60));
         lp.setMargins(0, dp(18), 0, 0);
-        column.addView(play, lp);
+        launch.addView(play, lp);
+
+        LinearLayout about = card(column);
+        about.addView(heading(text(T_ABOUT)));
+        diagnosticButton = button(text(T_COPY_DIAG), false, this::copyDiagnostics);
+        about.addView(diagnosticButton, new LinearLayout.LayoutParams(-1, dp(48)));
+        diagnosticNote = status(about);
 
         scroll.addView(column, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL));
         root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
@@ -960,7 +1041,11 @@ public final class Launcher extends Activity {
         }
         permissionBox.setVisibility(files ? View.GONE : View.VISIBLE);
         if (game != null) {
-            gameTitle.setText(files ? new GameActivity.Release(game).label() : game.getName());
+            if (files) {
+                GameActivity.Release release = new GameActivity.Release(game);
+                gameTitle.setText(release.label());
+                ((PlayButton) play).style(release.library);
+            } else gameTitle.setText(game.getName());
             gameTitle.setTextColor(Color.WHITE);
             gamePath.setText(game.getPath());
             gamePath.setVisibility(View.VISIBLE);
@@ -978,6 +1063,9 @@ public final class Launcher extends Activity {
         skipBox.removeAllViews();
         skipBox.addView(toggle(Settings.text(Settings.T_SKIP_INTRO), files && skipIntro(), files,
             null, this::setSkipIntro));
+        memoryBox.removeAllViews();
+        if (android.os.Process.is64Bit()) memoryBox.addView(toggle(text(T_LARGE_ADDRESS), largeAddressAware(this), true,
+            text(T_LARGE_ADDRESS_WHY), on -> prefs.edit().putBoolean("large_address_aware", on).apply()));
         gameFolder = files && game != null;
         fpsBox.removeAllViews();
         fpsBox.addView(fpsRow());
@@ -990,9 +1078,12 @@ public final class Launcher extends Activity {
     private void enable() {
         boolean idle = Unpacker.current == null && busy == null && (Textures.current == null || Textures.current.finished),
             files = storage();
+        filesHeading.setText((filesExpanded ? "▾ " : "▸ ") + text(T_GAME).toUpperCase(Locale.getDefault()));
+        fileDetails.setVisibility(filesExpanded && Unpacker.current == null && (busy == null || busyNote != note) ? View.VISIBLE : View.GONE);
         setEnabled(archiveButton, idle && files);
         setEnabled(folderButton, idle && files);
         play.setVisibility(game != null ? View.VISIBLE : View.GONE);
+        ((View) play.getParent()).setVisibility(game != null || playNote.getVisibility() == View.VISIBLE ? View.VISIBLE : View.GONE);
         optionsBox.setVisibility(game != null ? View.VISIBLE : View.GONE);
         setEnabled(play, idle && files && game != null);
         boolean extras = files && game != null && cleanupPlan != null && game.equals(cleanupPlan.root) && !cleanupPlan.files.isEmpty();
@@ -1009,20 +1100,88 @@ public final class Launcher extends Activity {
     }
 
     private void setBusy(String what) {
+        setBusy(what == null && busyNote != null ? busyNote : note, what);
+    }
+
+    private void setBusy(TextView target, String what) {
         busy = what;
-        note(what, false);
+        busyNote = target;
+        note(target, what, false);
         enable();
     }
 
     private void note(String text, boolean error) {
-        note.setVisibility(text == null ? View.GONE : View.VISIBLE);
-        note.setText(text);
-        note.setTextColor(error ? RED : GOLD);
+        note(note, text, error);
+    }
+
+    private void note(TextView target, String text, boolean error) {
+        boolean unchanged = (text == null ? target.getVisibility() == View.GONE : text.contentEquals(target.getText()))
+            && target.getCurrentTextColor() == (error ? RED : GOLD);
+        target.setVisibility(text == null ? View.GONE : View.VISIBLE);
+        target.setText(text);
+        target.setTextColor(error ? RED : GOLD);
+        if (unchanged) return;
+        LinearLayout actions = recoveryActions.get(target);
+        if (actions == null) return;
+        actions.removeAllViews();
+        if (!error || text == null) return;
+        prefs.edit().putString("last_error", text).apply();
+        if (target == note || target == playNote) {
+            actions.addView(button(text(T_FOLDER), false, () -> { if (idle()) pickFolder(ASK_FOLDER, base); }));
+            actions.addView(button(text(T_ARCHIVE), false, () -> { if (idle()) pickArchive(); }));
+        } else if (target == texNote) {
+            actions.addView(button(text(T_RETRY), false, () -> {
+                if (!idle() || texScanning != null) return;
+                note(texNote, null, false);
+                texStatus = null;
+                refreshTextures();
+            }));
+        } else if (target == cleanupNote) {
+            actions.addView(button(text(T_RETRY), false, () -> { if (idle()) scanCleanup(); }));
+        } else if (target == diagnosticNote) actions.addView(button(text(T_COPY_DIAG), false, this::copyDiagnostics));
+    }
+
+    private TextView status(LinearLayout parent) {
+        TextView view = label("", 14, GOLD);
+        view.setVisibility(View.GONE);
+        view.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        parent.addView(view);
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        parent.addView(actions);
+        recoveryActions.put(view, actions);
+        return view;
+    }
+
+    private boolean idle() {
+        return Unpacker.current == null && busy == null && (Textures.current == null || Textures.current.finished);
+    }
+
+    private void copyDiagnostics() {
+        if (copyingDiagnostics) return;
+        copyingDiagnostics = true;
+        setEnabled(diagnosticButton, false);
+        note(diagnosticNote, text(T_DIAG_PREPARING), false);
+        final File selected = game;
+        final String state = texState.getText().toString(), lastError = prefs.getString("last_error", "");
+        new Thread(() -> {
+            String edition = selected == null ? "not selected" : new GameActivity.Release(selected).label();
+            String gpuText;
+            try { Textures.Gpu found = Textures.gpu(); gpuText = found.renderer + "; GLES DXT=" + (found.probed ? found.s3tc : "unknown"); }
+            catch (RuntimeException | LinkageError failure) { gpuText = "unavailable: " + failure; }
+            String report = Diagnostics.report(this, edition, gpuText, "OpenGL ES", state, lastError);
+            handler.post(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                copyingDiagnostics = false;
+                setEnabled(diagnosticButton, true);
+                boolean copied = Diagnostics.copy(this, report);
+                note(diagnosticNote, text(copied ? T_DIAG_COPIED : T_CLIP_FAILED), !copied);
+            });
+        }, "launcher-diagnostics").start();
     }
 
     private void error(String text) {
         note(text, true);
-        dialog().setMessage(text).setPositiveButton(text(T_OK), null).show();
     }
 
     private AlertDialog.Builder dialog() { return new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert); }
@@ -1058,19 +1217,109 @@ public final class Launcher extends Activity {
     }
 
     private TextView button(String text, boolean primary, Runnable action) {
-        TextView b = new TextView(this);
+        TextView b = primary ? new PlayButton() : new TextView(this);
         b.setText(text);
         b.setGravity(Gravity.CENTER);
         b.setTextSize(primary ? 20 : 15);
-        b.setTextColor(primary ? GOLD : Color.WHITE);
+        b.setTextColor(Color.WHITE);
         if (primary) b.setTypeface(Typeface.DEFAULT_BOLD);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(primary ? 14 : 10));
-        bg.setColor(primary ? Color.rgb(60, 44, 10) : CELL);
-        if (primary) bg.setStroke(dp(2), GOLD_DARK);
-        b.setBackground(bg);
+        if (!primary) {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dp(10));
+            bg.setColor(CELL);
+            b.setBackground(bg);
+        }
         b.setOnClickListener(v -> action.run());
         return b;
+    }
+
+    static int[] playColours(String library) {
+        if ("void_tension".equals(library)) return new int[] {0xFF321529, 0xFFAC577B, 0xFFE792B8, 0xFFFFD4EB};
+        return new int[] {0xFF3C2C0A, 0xFFAA7D14, 0xFFFFCD32, 0xFFFFF0B0};
+    }
+
+    private final class PlayButton extends TextView {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path clip = new Path();
+        private final Matrix shift = new Matrix();
+        private int glow, particles;
+        private LinearGradient sheen;
+
+        PlayButton() { super(Launcher.this); style("void"); }
+
+        void style(String library) {
+            int[] colours = playColours(library);
+            if (glow == colours[2]) return;
+            glow = colours[2]; particles = colours[3];
+            GradientDrawable background = new GradientDrawable();
+            background.setCornerRadius(dp(14));
+            background.setColor(colours[0]);
+            background.setStroke(dp(2), colours[1]);
+            setBackground(background);
+            int rgb = particles & 0x00FFFFFF;
+            sheen = new LinearGradient(0, 0, dp(80), 0,
+                new int[] {rgb, 0x28000000 | rgb, rgb}, null, Shader.TileMode.CLAMP);
+            invalidate();
+        }
+
+        @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+            super.onSizeChanged(w, h, oldw, oldh);
+            clip.reset();
+            clip.addRoundRect(0, 0, w, h, dp(14), dp(14), Path.Direction.CW);
+        }
+
+        @Override public void onWindowFocusChanged(boolean focused) {
+            super.onWindowFocusChanged(focused);
+            invalidate();
+        }
+
+        @Override protected void onWindowVisibilityChanged(int visibility) {
+            super.onWindowVisibilityChanged(visibility);
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            if (isEnabled()) {
+                boolean motion = Build.VERSION.SDK_INT >= 26 ? ValueAnimator.areAnimatorsEnabled()
+                    : android.provider.Settings.Global.getFloat(getContentResolver(), android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0;
+                float phase = motion ? (SystemClock.uptimeMillis() % 3600) / 3600f : 0.25f;
+                float pulse = (float) (0.5 - 0.5 * Math.cos(phase * Math.PI * 2));
+                float inset = dp(1);
+                int saved = canvas.save();
+                canvas.clipPath(clip);
+                paint.setColor(glow);
+                paint.setAlpha((int) (12 + 22 * pulse));
+                canvas.drawRoundRect(0, 0, getWidth(), getHeight(), dp(14), dp(14), paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(dp(2));
+                paint.setAlpha((int) (45 + 85 * pulse));
+                canvas.drawRoundRect(inset, inset, getWidth() - inset, getHeight() - inset, dp(13), dp(13), paint);
+                paint.setStyle(Paint.Style.FILL);
+                shift.setTranslate(-dp(80) + phase * (getWidth() + dp(160)), 0);
+                sheen.setLocalMatrix(shift);
+                paint.setShader(sheen);
+                paint.setAlpha(255);
+                canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+                paint.setShader(null);
+                paint.setColor(particles);
+                for (int i = 0; i < 6; ++i) {
+                    float age = (phase + i / 6f) % 1;
+                    float x = getWidth() * (0.08f + ((i * 0.173f) % 0.84f));
+                    float y = getHeight() * (0.95f - age * 0.85f);
+                    float radius = dp(1.5f) * (float) Math.sin(age * Math.PI);
+                    paint.setAlpha((int) (190 * Math.sin(age * Math.PI)));
+                    canvas.drawCircle(x, y, radius, paint);
+                    if (i % 2 == 0) {
+                        paint.setStrokeWidth(dp(1));
+                        canvas.drawLine(x - radius * 2, y, x + radius * 2, y, paint);
+                        canvas.drawLine(x, y - radius * 2, x, y + radius * 2, paint);
+                    }
+                }
+                canvas.restoreToCount(saved);
+                if (motion && hasWindowFocus() && getWindowVisibility() == View.VISIBLE && isShown()) postInvalidateDelayed(33);
+            }
+            super.onDraw(canvas);
+        }
     }
 
     private View copyRow(File dir) {
@@ -1141,6 +1390,7 @@ public final class Launcher extends Activity {
         row.setPadding(0, dp(6), 0, dp(6));
         LinearLayout words = new LinearLayout(this);
         words.setOrientation(LinearLayout.VERTICAL);
+        words.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         words.addView(label(text, 15, Color.WHITE));
         if (why != null) words.addView(label(why, 12, GREY));
         row.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1156,15 +1406,34 @@ public final class Launcher extends Activity {
                 c.drawCircle(on[0] ? w - r : r, r, r * 0.8f, p);
             }
         };
+        pill.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(52), dp(30));
         lp.setMargins(dp(10), 0, 0, 0);
         row.addView(pill, lp);
         row.setAlpha(enabled ? 1f : 0.45f);
+        row.setFocusable(true);
+        row.setEnabled(enabled);
+        row.setContentDescription(why == null || why.isEmpty() ? text : text + "\n" + why);
+        row.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                info.setClassName(android.widget.Switch.class.getName());
+                info.setCheckable(true);
+                info.setChecked(on[0]);
+            }
+
+            @Override public void onInitializeAccessibilityEvent(View host, AccessibilityEvent event) {
+                super.onInitializeAccessibilityEvent(host, event);
+                event.setClassName(android.widget.Switch.class.getName());
+                event.setChecked(on[0]);
+            }
+        });
         if (enabled) {
             row.setOnClickListener(v -> {
                 on[0] = !on[0];
                 sink.set(on[0]);
                 pill.invalidate();
+                row.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
             });
         }
         return row;
@@ -1211,7 +1480,10 @@ public final class Launcher extends Activity {
         T_TEX_STALE = 70, T_TEX_ASTC = 71, T_TEX_ETC2 = 72, T_TEX_REMOVE = 73, T_TEX_CONVERTING = 74, T_TEX_PROGRESS = 75,
         T_TEX_DONE = 76, T_TEX_FAILED = 77, T_TEX_STOPPED = 78, T_TEX_SPACE = 79, T_TEX_ASK = 80, T_TEX_SCANNING = 81,
         T_TEX_UNAVAILABLE = 82, T_TEX_REMOVE_ASK = 83, T_TEX_NOT_NEEDED = 84, T_TEX_STOP_ASK = 85, T_TEX_FINISHING = 86,
-        T_TEX_DONE_TIME = 87, T_TEX_UNREADABLE = 88, T_FPS = 89, T_FPS_WHY = 90, T_FPS_NONE = 91, T_FPS_VALUE = 92, E_NO_PICKER = 93;
+        T_TEX_DONE_TIME = 87, T_TEX_UNREADABLE = 88, T_FPS = 89, T_FPS_WHY = 90, T_FPS_NONE = 91, T_FPS_VALUE = 92, E_NO_PICKER = 93,
+        T_TEX_FULL = 94, T_TEX_RECOMMEND = 95, T_TEX_UNKNOWN = 96,
+        T_ABOUT = 97, T_COPY_DIAG = 98, T_DIAG_COPIED = 99, T_CLIP_FAILED = 100, T_RETRY = 101,
+        T_TEX_ORIGINALS = 102, T_TEX_STATUS = 103, T_TEX_CHECK_FAILED = 104, T_TEX_OUTDATED = 105, T_DIAG_PREPARING = 106, T_LARGE_ADDRESS = 107, T_LARGE_ADDRESS_WHY = 108;
     private static final String[][] TEXTS = {
         {"Game", "Игра", "Spiel", "Gra"},
         {"No game chosen yet", "Игра ещё не выбрана", "Noch kein Spiel gewählt", "Nie wybrano jeszcze gry"},
@@ -1410,6 +1682,25 @@ public final class Launcher extends Activity {
          "Системный выбор файлов недоступен. Включите приложение «Файлы» в настройках Android и попробуйте снова.",
          "Die System-Dateiauswahl ist nicht verfügbar. Aktivieren Sie die App „Dateien“ in den Android-Einstellungen und versuchen Sie es erneut.",
          "Systemowy wybór plików jest niedostępny. Włącz aplikację „Pliki” w ustawieniach Androida i spróbuj ponownie."},
+        {"Full support", "Полная поддержка", "Volle Unterstützung", "Pełna obsługa"},
+        {"Conversion recommended", "Рекомендуется конвертация", "Konvertierung empfohlen", "Zalecana konwersja"},
+        {"DXT support could not be checked.", "Не удалось проверить поддержку DXT.",
+         "Die DXT-Unterstützung konnte nicht geprüft werden.", "Nie udało się sprawdzić obsługi DXT."},
+        {"About", "О приложении", "Über die App", "O aplikacji"},
+        {"Copy diagnostic report", "Скопировать отчёт диагностики", "Diagnosebericht kopieren", "Kopiuj raport diagnostyczny"},
+        {"Diagnostic report copied", "Отчёт диагностики скопирован", "Diagnosebericht kopiert", "Raport diagnostyczny skopiowany"},
+        {"Could not copy the report", "Не удалось скопировать отчёт", "Bericht konnte nicht kopiert werden", "Nie udało się skopiować raportu"},
+        {"Check again", "Проверить снова", "Erneut prüfen", "Sprawdź ponownie"},
+        {"Original textures", "Оригинальные текстуры", "Originaltexturen", "Oryginalne tekstury"},
+        {"Converted to %s", "Конвертировано в %s", "In %s konvertiert", "Przekonwertowano do %s"},
+        {"Texture check failed", "Не удалось проверить текстуры", "Texturprüfung fehlgeschlagen", "Nie udało się sprawdzić tekstur"},
+        {"outdated copy", "устаревшая копия", "veraltete Kopie", "nieaktualna kopia"},
+        {"Preparing report…", "Подготовка отчёта…", "Bericht wird vorbereitet…", "Przygotowywanie raportu…"},
+        {"Game memory limit up to 4 GB", "Лимит памяти игры до 4 ГБ", "Speicherlimit des Spiels bis 4 GB", "Limit pamięci gry do 4 GB"},
+        {"Enabled by default with at least 5 GiB RAM. Applies when the game starts again.",
+         "Включено по умолчанию при наличии минимум 5 ГиБ ОЗУ. Применяется при новом запуске игры.",
+         "Standardmäßig ab 5 GiB RAM aktiviert. Gilt beim nächsten Spielstart.",
+         "Domyślnie włączone przy co najmniej 5 GiB RAM. Zmiana działa po ponownym uruchomieniu gry."},
     };
 
     static String text(int id) {

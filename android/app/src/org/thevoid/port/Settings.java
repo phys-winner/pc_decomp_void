@@ -10,9 +10,8 @@ import java.util.Map;
 /** The port's settings. Where the game's options menu carries the port's
  *  pages (a patched ui/main_menu.bin), they live in the game's own Settings
  *  (its data\settings.xml, the player's copy: keys Port*) and the menu
- *  changes them; the layer reads them back. Elsewhere (the 2008 Polish
- *  release) the layer's
- *  own menu keeps them in SharedPreferences. Look speed and inversion are the
+ *  changes them; the layer reads them back in both game generations. The fallback
+ *  panel keeps them in SharedPreferences. Look speed and inversion are the
  *  game's own MouseSensitivity and InvertMouse: the camera turns by mouse
  *  motion, which the game scales and inverts. */
 final class Settings {
@@ -303,7 +302,7 @@ final class Settings {
         return new int[] {gw, gh};
     }
 
-    /* The layer's menus speak the release's language, else the device's (ru, de, pl; English otherwise). */
+    /* The layer uses the launcher's language, then the release or system for older callers. */
     static final int T_LOAD_ASK = 0, T_MORE = 1, T_SKIP_INTRO = 2, T_HIDE_CURSOR = 3, T_WIDE = 4,
         T_RENDER_SCALE = 5, T_UI_SCALE = 6, T_PICKER = 7, T_PICK_STRIP = 8, T_PICK_FAN = 9, T_PICK_BOTH = 10,
         T_HDR = 11, T_OFF = 12, T_SIMPLE = 13, T_FULL = 14, T_ANISO = 15, T_TEXTURES = 16, T_LIGHTING = 17,
@@ -489,6 +488,7 @@ final class Settings {
     /** The release's language (fsystems.xml: Russian, German, Polish,
      *  English): the layer speaks it too, as the game's own menus do. */
     static String gameLanguage = "";
+    static String portLanguage = "";
     static boolean legacyGame;
     private static String[] gameTexts;
 
@@ -501,10 +501,16 @@ final class Settings {
         return gameTexts != null && index >= 0 && index < gameTexts.length ? gameTexts[index].trim() : "";
     }
 
+    static String language() {
+        String game = (portLanguage.isEmpty() ? gameLanguage : portLanguage).toLowerCase(Locale.ROOT);
+        return game.startsWith("ru") || game.equals("uk") || game.equals("be") ? "ru"
+            : game.startsWith("de") || game.startsWith("german") ? "de"
+            : game.startsWith("pl") || game.startsWith("polish") ? "pl"
+            : game.startsWith("en") ? "en" : Locale.getDefault().getLanguage();
+    }
+
     static String text(int id) {
-        String game = gameLanguage.toLowerCase(Locale.ROOT);
-        String lang = game.startsWith("russian") ? "ru" : game.startsWith("german") ? "de" : game.startsWith("polish") ? "pl"
-            : game.startsWith("english") ? "en" : Locale.getDefault().getLanguage();
+        String lang = language();
         int col = "ru".equals(lang) || "uk".equals(lang) || "be".equals(lang) ? 1 : "de".equals(lang) ? 2 : "pl".equals(lang) ? 3 : 0;
         return TEXTS[id][col];
     }

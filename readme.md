@@ -1,30 +1,36 @@
 # pc_decomp_void
 
-## Version 0.4-dev
+## Version 0.5-dev
 
-Development release of The Void 2009 and Tension 2008, including all changes
-since 0.3.1-dev. APK versionCode 7 preserves the existing update signing key.
+Development release of The Void 2009 and Tension 2008. APK versionCode 8
+preserves the existing update signing key.
 
-- The Void 2009 developer commands have eight localized, alphabetically sorted
-  categories, with manual command entry last.
-- Checked x87 FNSAVE/FRSTOR images preserve control/status words and exact integer
-  shadows in The Void 2009. The model still uses double arithmetic with integer
-  shadows; full 80-bit arithmetic and historical FIP/FDP/FOP are not implemented.
-- Both games include correct EVENT query flags/error handling, FSINCOS order,
-  bounded driver caches, safe buffer locks and guest virtual-memory validation.
-- Tension includes the camera/prologue repair, expanded shader preparation,
-  native Theora paths and its own PGO profile. Short menu taps and Body/Back
-  handling are repaired; full-precision shader operations use highp.
-- Smaller image packaging shares the D3DX compiler image. Tension obtains its
-  original Game.exe and GameModule.dll from the user's Polish 2008 distribution
-  and validates size/SHA-256. Keep its complete bin/win32 folder when importing.
+- The shared launcher provides separate game cards, folders, Play/Return state
+  and animated palettes. Its source is bundled under `android/launcher`.
+- Opening videos can be skipped independently for each game. Existing folder,
+  frame-limit and intro choices migrate while profiles remain separate.
+- Both games have three additional settings pages with English, Russian,
+  German and Polish port text and Unicode label fonts.
+- Menus and hit regions fit narrow displays; long captions wrap and navigation
+  arrows stay at the viewport edges.
+- Every developer-command dialog uses an explicit dark Material theme. Lists,
+  categories, parameters and manual input remain readable with legacy game themes
+  and Android night mode.
+- Preparation reports file/texture counts, speed and estimated time, with
+  copyable diagnostics. Extracted libraries are protected before loading.
+- Both runtimes support the selected approximately 2 or 4 GiB guest address
+  space, matching PE/Win32 memory reports, zeroed reused host subpages and
+  checked rollback after allocation failures.
 
-Both native libraries and the full APK package passed validation. Earlier
-hardware smoke checks cover both games; no new device run, complete campaign,
-full save/load acceptance or measured FPS gain is claimed for this publication.
-The new command categories and x87 state support remain disabled for Tension;
-transfers 23 and 24 are tracked in [TECHDEBT-2008.md](TECHDEBT-2008.md).
-See [CHANGELOG.md](CHANGELOG.md) for the full changes.
+The complete APK passed signature, ZIP, 16 KiB alignment, native XZ and 17601
+indexed-asset checks. Dialog readability was verified on a Pixel 10/API 37 in
+both games using isolated QA profiles; all 347 player-profile files were
+unchanged. Four day/night and host-theme configurations reproduced the old
+1:1 contrast and passed about 10:1 with the fix. No complete campaign, full
+save/load acceptance or measured FPS gain is claimed. Tension developer-command
+categories and x87 state transfers 23/24 remain open in
+[TECHDEBT-2008.md](TECHDEBT-2008.md).
+See [CHANGELOG.md](CHANGELOG.md) for the release changes.
 
 The texture encoders are pinned upstream Git submodules: ASTC Encoder 5.7.0
 (`baff485b0ff36d2f95d28961605106502c653966`) and etcpak
@@ -50,7 +56,7 @@ rights holders. Game names and original content belong to their respective owner
 
 ## Status
 
-Current version: **0.4-dev** (`versionCode=7`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
+Current version: **0.5-dev** (`versionCode=8`). See [CHANGELOG.md](CHANGELOG.md). This is a development build for
 sideloading, signed with a local development key.
 
 - Original x86 game logic is translated ahead of time with
@@ -84,7 +90,7 @@ installed.
 | Python | 3.13; packages pinned in `requirements.txt` |
 | Git | Available on `PATH` |
 | Java | JDK 24; set `JAVA_HOME` |
-| Android SDK Platform | `platforms;android-36` |
+| Android SDK Platform | `platforms;android-37.0` |
 | Android SDK Build Tools | `build-tools;36.1.0` |
 | Android NDK | r27c, `27.2.12479018` |
 | Android Platform Tools | Optional, for ADB deployment |
@@ -100,7 +106,7 @@ object files and native libraries. The default native build uses 12 compiler job
 Install the Android components with the SDK Manager or `sdkmanager.bat`:
 
 ```powershell
-sdkmanager.bat "platforms;android-36" "build-tools;36.1.0" "ndk;27.2.12479018" "platform-tools"
+sdkmanager.bat "platforms;android-37.0" "build-tools;36.1.0" "ndk;27.2.12479018" "platform-tools"
 ```
 
 ## Original inputs

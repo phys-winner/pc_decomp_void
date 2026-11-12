@@ -49,6 +49,8 @@ import struct
 import sys
 from pathlib import Path
 import re
+import zipfile
+from contextlib import ExitStack
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,7 +71,17 @@ def read_entry(index_path, name):
     for container in index["containers"]:
         for entry in container["entries"]:
             if entry["name"].lower() == name.lower():
-                with open(Path(index["source"]) / container["name"], "rb") as f:
+                path = Path(index["source"]) / container["name"]
+                if not path.is_file():
+                    # shortcut: ZIP seeks decompress from the start; restore VFS inputs for full regeneration.
+                    edition = {"ru": "2009-russian", "de": "2009-german", "pl": "2008-polish"}[INDEXES[index_path]]
+                    with zipfile.ZipFile(ROOT / "pub" / f"the-void-{edition}.zip") as package:
+                        with package.open("data/" + container["name"]) as f:
+                            f.seek(entry["offset"])
+                            data = f.read(entry["size"])
+                            assert len(data) == entry["size"]
+                            return data
+                with open(path, "rb") as f:
                     f.seek(entry["offset"])
                     return f.read(entry["size"])
     return None
@@ -732,8 +744,70 @@ for name, patch in TOUCH_PATCHES + READABILITY_PATCHES + [('Scripts\\world\\worl
         PATCHES[match] = (name, combined_patch(PATCHES[match][1], patch))
 
 
+def localized_menus(entries):
+    """Keep original game strings; localize the port's added options independently."""
+    if not entries:
+        return entries
+    from patch_options import TEXTS
+    name = "Scripts\\ui\\main_menu.bin"
+    patch = next(p for path, p in PATCHES if path == name)
+    entries = [e for e in entries if not (e["path"] == name and e.get("ui_language"))
+               and not e["path"].startswith("Textures\\Fonts\\portfont_")]
+    index = json.loads((ROOT / "research/vfs-index.json").read_text(encoding="utf-8"))
+    container = next(c for c in index["containers"] if c["name"] == "Textures.vfs")
+    fonts = sorted((e for e in container["entries"] if re.fullmatch(r"Textures\\Fonts\\fontmain_(?:[89]|1[0-9]|2[0-8]|36)\.ft", e["name"], re.I)),
+                   key=lambda e: e["offset"])
+    assert len(fonts) == 22
+    font_entries = []
+    with ExitStack() as stack:
+        source = Path(index["source"]) / "Textures.vfs"
+        if source.is_file():
+            stream = stack.enter_context(source.open("rb"))
+        else:
+            package = stack.enter_context(zipfile.ZipFile(ROOT / "pub/the-void-2009-russian.zip"))
+            stream = stack.enter_context(package.open("data/Textures.vfs"))
+        for font in fonts:
+            stream.seek(font["offset"])
+            payload = stream.read(font["size"])
+            assert len(payload) == font["size"]
+            height, _, glyphs = struct.unpack_from("<3I", payload)
+            assert height > 0 and glyphs > 1000
+            path = font["name"].replace("fontmain_", "portfont_")
+            file = "port-fonts/" + path.rsplit("\\", 1)[-1]
+            out = OUT / file
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(payload)
+            font_entries.append(dict(path=path, source=name, file=file, sha256=hashlib.sha256(payload).hexdigest()))
+    translations = dict(TEXTS)
+    for index_path, edition_language in INDEXES.items():
+        data = read_entry(index_path, name)
+        sha = hashlib.sha256(data).hexdigest()
+        entries.extend(dict(font, original_sha256=sha, original_size=len(data), index=index_path) for font in font_entries)
+        original_texts = TEXTS[edition_language]
+        try:
+            for language, texts in translations.items():
+                TEXTS[edition_language] = texts
+                module = Module(data, legacy=edition_language == "pl")
+                patch(module, edition_language)
+                payload = module.encode()
+                Module(payload, legacy=module.legacy)
+                file = f"{sha}/ui-{language}/{name.replace(chr(92), '/')}"
+                out = OUT / file
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(payload)
+                entries.append(dict(path=name, original_sha256=sha, original_size=len(data), file=file,
+                                    sha256=hashlib.sha256(payload).hexdigest(), index=index_path, ui_language=language))
+        finally:
+            TEXTS[edition_language] = original_texts
+    return entries
+
+
 def main():
     OUT.resolve().relative_to((ROOT / "build").resolve())
+    if "--menus-only" in sys.argv:
+        entries = localized_menus(json.loads((OUT / "index.json").read_text(encoding="utf-8")))
+        (OUT / "index.json").write_text(json.dumps(entries, indent=2), encoding="utf-8")
+        return
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -854,6 +928,7 @@ def main():
     for index_path, lang in INDEXES.items():
         if (ROOT / index_path).is_file():
             export_mobile_gestures(index_path, OUT / 'mobile-icons' / lang, read_entry, dds_rgba)
+    entries = localized_menus(entries)
     (OUT / "index.json").write_text(json.dumps(entries, indent=2), encoding="utf-8")
     print(f"{len(entries)} patched files in {OUT}")
 

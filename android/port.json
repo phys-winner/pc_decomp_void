@@ -1,0 +1,217 @@
+{
+  "schema": 1,
+  "app": {
+    "label": "The Void",
+    "title": "The Void / Tension",
+    "subtitle": {
+      "en": "The Colour of the Void",
+      "ru": "Голос Цвета",
+      "de": "Die Farbe der Leere",
+      "pl": "Głos Koloru"
+    },
+    "storage": "TheVoid",
+    "github": "phys-winner/pc_decomp_void",
+    "languages": [
+      "en",
+      "ru",
+      "de",
+      "pl"
+    ],
+    "hooks": "org.thevoid.port.LauncherHooks",
+    "allFilesAccess": true,
+    "autoLaunch": false
+  },
+  "theme": {
+    "background": [
+      "#171510",
+      "#080608",
+      "#020203"
+    ],
+    "accent": "#EBCB7F",
+    "accentDark": "#806020",
+    "primaryFill": "#403010",
+    "playGlow": "#EBCB7F",
+    "playParticles": "#EBCB7F",
+    "titleFont": "serif-bold"
+  },
+  "distributions": [
+    {
+      "id": "void",
+      "title": "The Void — 2009",
+      "activity": "org.thevoid.port.GameActivity",
+      "intro": { "default": false },
+      "renderers": [
+        "gles"
+      ],
+      "parts": [
+        {
+          "id": "game",
+          "folder": "{storage}",
+          "marker": "data/info.xml",
+          "required": [
+            "data/info.xml",
+            "data/fsystems.xml",
+            "data/settings.xml",
+            "data/actions.xml",
+            "data/Scripts.vfs",
+            "data/Properties.vfs",
+            "data/Textures.vfs",
+            "data/Scenes.vfs",
+            "data/Sounds.vfs",
+            "data/Video.vfs",
+            "data/Animations.vfs",
+            "data/Gestures.vfs",
+            "data/Effects.vfs",
+            "data/Prefabs.vfs",
+            "data/Physics.vfs"
+          ],
+          "mount": false
+        }
+      ],
+      "theme": {
+        "primaryFill": "#3C2C0A",
+        "accentDark": "#AA7D14",
+        "playGlow": "#FFCD32",
+        "playParticles": "#FFF0B0"
+      }
+    },
+    {
+      "id": "tension",
+      "title": "Tension — 2008",
+      "activity": "org.thevoid.port.TensionActivity",
+      "intro": { "default": false },
+      "renderers": [
+        "gles"
+      ],
+      "parts": [
+        {
+          "id": "game",
+          "folder": "{storage}/game-tension",
+          "marker": "data/info.xml",
+          "required": [
+            "data/info.xml",
+            "data/fsystems.xml",
+            "data/settings.xml",
+            "data/actions.xml",
+            "data/Scripts.vfs",
+            "data/Properties.vfs",
+            "data/Textures.vfs",
+            "data/Scenes.vfs",
+            "data/Sounds.vfs",
+            "data/Video.vfs",
+            "data/Animations.vfs",
+            "data/Gestures.vfs",
+            "data/Effects.vfs",
+            "data/Prefabs.vfs",
+            "data/Physics.vfs",
+            "bin/win32/Game.exe",
+            "bin/win32/GameModule.dll"
+          ],
+          "mount": false
+        }
+      ],
+      "theme": {
+        "primaryFill": "#321529",
+        "accentDark": "#AC577B",
+        "playGlow": "#E792B8",
+        "playParticles": "#FFD4EB"
+      }
+    }
+  ],
+  "renderers": {
+    "default": "gles",
+    "modes": [
+      {
+        "id": "gles",
+        "kind": "gles",
+        "title": "OpenGL ES 3.2"
+      }
+    ]
+  },
+  "options": [
+    {
+      "key": "large_address_aware",
+      "type": "bool",
+      "default": "0",
+      "defaultMinRamGiB": 5,
+      "arm64Only": true,
+      "title": {
+        "en": "Large address space",
+        "ru": "Расширенное адресное пространство",
+        "de": "Großer Adressraum",
+        "pl": "Rozszerzona przestrzeń adresowa"
+      }
+    },
+    {
+      "key": "fps_limit",
+      "type": "choice",
+      "default": "0",
+      "title": {
+        "en": "Frame limit",
+        "ru": "Ограничение FPS",
+        "de": "Bildratenlimit",
+        "pl": "Limit klatek"
+      },
+      "choices": [
+        {
+          "value": "0",
+          "title": {
+            "en": "Display maximum",
+            "ru": "Максимум экрана",
+            "de": "Displaymaximum",
+            "pl": "Maksimum ekranu"
+          }
+        },
+        {
+          "value": "30",
+          "title": "30 FPS"
+        },
+        {
+          "value": "60",
+          "title": "60 FPS"
+        },
+        {
+          "value": "90",
+          "title": "90 FPS"
+        },
+        {
+          "value": "120",
+          "title": "120 FPS"
+        }
+      ]
+    }
+  ],
+  "textures": {
+    "backend": "org.thevoid.port.LauncherTextures"
+  },
+  "hints": {
+    "options": {
+      "en": "Graphics and touch controls are in the game’s additional settings. The launcher’s language applies to port text on the next game start.",
+      "ru": "Графика и сенсорное управление — в дополнительных настройках внутри игры. Язык лаунчера применяется к строкам порта при следующем запуске игры.",
+      "de": "Grafik und Touch-Steuerung befinden sich in den zusätzlichen Spieleinstellungen. Die Launcher-Sprache gilt beim nächsten Spielstart auch für die Port-Texte.",
+      "pl": "Grafika i sterowanie dotykowe są w dodatkowych ustawieniach gry. Język launchera dotyczy tekstów portu od następnego uruchomienia gry."
+    }
+  },
+  "cleanup": {
+    "categories": [
+      {
+        "id": "debug",
+        "part": "game",
+        "title": {
+          "en": "PC debug files",
+          "ru": "Отладочные файлы ПК",
+          "de": "PC-Debugdateien",
+          "pl": "Pliki debugowania PC"
+        },
+        "globs": [
+          "bin/**/*.id0",
+          "bin/**/*.id1",
+          "bin/**/*.id2",
+          "bin/**/*.nam",
+          "bin/**/*.til",
+          "bin/**/*.pdb"
+        ]
+      }
+    ]
+  }
+}

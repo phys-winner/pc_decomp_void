@@ -44,6 +44,7 @@ final class NativeLibrary {
         String file = "lib" + library + ".so";
         File dev = new File(context.getFilesDir(), file);
         if (dev.isFile()) {
+            if (!dev.setReadOnly()) throw new IOException("cannot protect " + dev);
             System.load(dev.getAbsolutePath());
             return;
         }
@@ -89,6 +90,7 @@ final class NativeLibrary {
             android.util.Log.i("TheVoid", "native: " + file + " unpacked (" + size + " bytes) in "
                 + (android.os.SystemClock.elapsedRealtime() - started) + " ms");
         }
+        if (!target.setReadOnly()) throw new IOException("cannot protect " + target);
         System.load(target.getAbsolutePath());
     }
 

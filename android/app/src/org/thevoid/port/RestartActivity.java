@@ -14,7 +14,12 @@ public final class RestartActivity extends Activity {
         super.onCreate(state);
         int pid = getIntent().getIntExtra(PID, -1);
         if (pid > 0) android.os.Process.killProcess(pid);
-        Intent i = new Intent(this, getIntent().getBooleanExtra(LAUNCHER, false) ? Launcher.class : GameActivity.class);
+        Intent i = new Intent(this, getIntent().getBooleanExtra(LAUNCHER, false)
+            ? org.thevoid.port.launcher.LauncherActivity.class
+            : "tension".equals(getIntent().getStringExtra(org.thevoid.port.launcher.Launch.EXTRA_DISTRIBUTION))
+                ? TensionActivity.class : GameActivity.class);
+        i.putExtra(org.thevoid.port.launcher.Launch.EXTRA_DISTRIBUTION,
+            getIntent().getStringExtra(org.thevoid.port.launcher.Launch.EXTRA_DISTRIBUTION));
         i.putExtra(Launcher.EXTRA_GAME, getIntent().getStringExtra(Launcher.EXTRA_GAME));
         i.putExtra("userdata", getIntent().getStringExtra("userdata"));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);

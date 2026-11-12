@@ -19,6 +19,8 @@ def main():
     # Two metadata red-zone slots expose the old out-of-bounds writes without invoking host UB.
     assert production.count("[PAGES]") == 4
     production = production.replace("[PAGES]", "[PAGES + 2]")
+    # This fixture mocks storage; the shared large-address runtime probe verifies real zero-filled pages.
+    production = production.replace("memset(GPTR(p << 12), 0, GUEST_PAGE)", "zero_guest_page(p << 12, GUEST_PAGE)")
     (out / "production.h").write_text(production)
     (out / "probe.c").write_text(r'''
 #include <assert.h>
@@ -35,6 +37,8 @@ static int pthread_mutex_unlock(int *m) { assert(*m==1); *m=0; return 0; }
 #define GUEST_PAGE 0x1000u
 #define GUEST_GRANULARITY 0x10000u
 #define GUEST_USER_TOP 0x7FFE0000u
+#define GUEST_THUNK_BASE 0x7FF00000u
+#define GUEST_THUNK_LIMIT 0x7FFD0000u
 #define ERROR_INVALID_PARAMETER_ 87u
 #define ERROR_INVALID_ADDRESS_ 487u
 #define ERROR_NOT_ENOUGH_MEMORY_ 8u
@@ -53,9 +57,12 @@ static int pthread_mutex_unlock(int *m) { assert(*m==1); *m=0; return 0; }
 static uint32_t query[7], last_error;
 #define MEM32(a) query[(a)/4]
 #define void_log(...) ((void)0)
-static unsigned protects, discards, maps;
+static unsigned protects, discards, maps, zeroed_pages;
 static int fail_protect;
 static void void_set_last_error(uint32_t e) { last_error=e; }
+static void void_fatal(const char *format, ...) { (void)format; abort(); }
+static void zero_guest_page(uint32_t address, size_t size) { (void)address; assert(size == GUEST_PAGE); ++zeroed_pages; }
+int void_vm_writable(uint32_t address, uint32_t size);
 static int mprotect(void *p,size_t n,int prot) {
     (void)p;(void)n;(void)prot; ++protects; return fail_protect;
 }
@@ -70,7 +77,7 @@ static void reset(void) {
     memset(page_state,0,sizeof page_state);memset(page_protect,0,sizeof page_protect);
     memset(page_alloc,0,sizeof page_alloc);memset(alloc_protect,0,sizeof alloc_protect);
     memset(granule_used,0,sizeof granule_used);granule_used[0]=1;
-    protects=discards=maps=last_error=0;fail_protect=0;assert(!vm_lock);
+    protects=discards=maps=zeroed_pages=last_error=0;fail_protect=0;assert(!vm_lock);
 }
 static void cross_window(void) {
     reset();page_state[PAGES-1]=page_state[PAGES]=ST_RESERVE;
@@ -115,7 +122,7 @@ int main(void) {
     for(unsigned page=4096;page<=16384;page*=4) {
         reset();host_page=page;
         assert(void_vm_alloc(0x10001,1,MEM_RESERVE_|MEM_COMMIT_,PAGE_READWRITE_)==0x10000);
-        assert(page_state[16]==ST_COMMIT && page_state[17]==ST_FREE);
+        assert(page_state[16]==ST_COMMIT && page_state[17]==ST_FREE && !zeroed_pages);
         assert(void_vm_free(0x10000,0,MEM_RELEASE_) && page_state[16]==ST_FREE);
         assert(void_vm_alloc(0x20000,16384,MEM_RESERVE_|MEM_COMMIT_,PAGE_READWRITE_)==0x20000);
         uint32_t old=0;assert(void_vm_protect(0x21001,1,PAGE_READONLY_,&old) && old==PAGE_READWRITE_);
@@ -124,6 +131,9 @@ int main(void) {
         discards=0;assert(void_vm_free(0x21001,1,MEM_DECOMMIT_));
         assert(page_state[32]==ST_COMMIT && page_state[33]==ST_RESERVE && page_state[34]==ST_COMMIT);
         assert(discards==(page==4096));
+        zeroed_pages=0;
+        assert(void_vm_alloc(0x21001,1,MEM_COMMIT_,PAGE_READWRITE_)==0x21000);
+        assert(zeroed_pages==(page>4096)); /* only a reused subpage touches physical RAM */
         assert(void_vm_free(0x20000,0,MEM_DECOMMIT_));
         for(unsigned p=32;p<36;++p) assert(page_state[p]==ST_RESERVE);
         assert(void_vm_free(0x20000,0,MEM_RELEASE_) && !granule_used[2]);

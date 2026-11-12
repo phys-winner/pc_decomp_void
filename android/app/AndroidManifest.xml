@@ -1,26 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.thevoid.port"
-    android:versionCode="7" android:versionName="0.4-dev">
-  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+    android:versionCode="8" android:versionName="0.5-dev">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="37" />
+  <!-- launcher:manifest -->
   <uses-feature android:glEsVersion="0x00030002" android:required="true" />
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
   <uses-permission android:name="android.permission.VIBRATE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-  <application android:label="The Void" android:icon="@mipmap/ic_launcher" android:debuggable="true"
+  <application android:label="The Void" android:icon="@mipmap/ic_launcher" android:debuggable="true" android:appCategory="game"
       android:allowBackup="false"
       android:extractNativeLibs="true" android:requestLegacyExternalStorage="true" android:hasCode="true"
       android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+    <!-- launcher:application -->
     <activity android:name=".Launcher" android:exported="true"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN" />
-        <category android:name="android.intent.category.LAUNCHER" />
-      </intent-filter>
     </activity>
     <!-- Exported for the tools (am start -n org.thevoid.port/.GameActivity). -->
-    <activity android:name=".GameActivity" android:exported="true" android:screenOrientation="sensorLandscape"
+    <activity android:name=".GameActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:taskAffinity="org.thevoid.port.game"
+        android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|screenLayout|uiMode"
+        android:launchMode="singleTask" />
+    <activity android:name=".TensionActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:taskAffinity="org.thevoid.port.game"
         android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|screenLayout|uiMode"
         android:launchMode="singleTask" />
     <activity android:name=".RestartActivity" android:exported="false" android:process=":restart"

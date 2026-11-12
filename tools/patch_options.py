@@ -1,5 +1,5 @@
 """The port's settings as pages of the game's own options menu
-(Scripts\\ui\\main_menu.bin of the 2009 releases), built with the menu's
+(Scripts\\ui\\main_menu.bin of the 2008 and 2009 releases), built with the menu's
 own controls so that they look and behave like its pages.
 
 The options menu is a set of states (gscript contexts) sharing the fields of
@@ -20,12 +20,13 @@ Settings, 1 resets them, 2 is Return. The patch
 Places follow the original pages: units of 1/1200 of the screen's height
 from its centre, y up; a check box's image is 256 units with the box in its
 middle, its caption at (+184, -117); a title is 40 units high, a caption 26.
-The pages keep clear of the Default and Return controls in the bottom
-corners on 16:9 screens (wider ones have more room at the sides).
+The menu's scale also fits its 16:9 design into narrower viewports, including
+the original controls and their hit masks. Long check-box captions wrap.
 
 Settings values are strings in the profile's settings.xml (keys Port*),
 which the touch layer reads (Settings.java)."""
 import struct
+import textwrap
 
 from gscript_binary import p32
 from patch_native_menu import Assembler
@@ -120,6 +121,53 @@ for lang, value in {
 }.items():
     TEXTS[lang]["gyro_invert_v"] = value
 
+TEXTS["pl"] = {'tab': 'Dodatkowe',
+ 'render': 'Skala renderowania',
+ 'ui': 'Skala interfejsu',
+ 'aniso': 'Filtrowanie anizotropowe',
+ 'off': 'Wył.',
+ 'wide': 'Szeroki ekran (Hor+)',
+ 'hdr': 'HDR',
+ 'simple': 'Uproszczony',
+ 'full': 'Pełny',
+ 'light': 'Jakość oświetlenia',
+ 'high': 'Wysoka',
+ 'medium': 'Średnia',
+ 'low': 'Niska',
+ 'textures': 'Tekstury wysokiej jakości',
+ 'sound': 'Dźwięk wysokiej jakości',
+ 'gyro': 'Żyroskop',
+ 'size': 'Rozmiar przycisków',
+ 'opacity': 'Przezroczystość przycisków',
+ 'vibration': 'Wibracje',
+ 'left': 'Sterowanie dla leworęcznych',
+ 'run': 'Bieg przy pełnym wychyleniu drążka',
+ 'cursor': 'Ukryj kursor gry',
+ 'intro': 'Pomiń filmy początkowe',
+ 'bob': 'Kołysanie kamery przy chodzeniu',
+ 'accel': 'Szybsze obroty przy szybkich przesunięciach',
+ 'decimal': ',',
+ 'next': 'Następna strona',
+ 'back': 'Poprzednia strona',
+ 'picker': 'Wybór koloru',
+ 'strip': 'Pasek',
+ 'fan': 'Wachlarz',
+ 'both': 'Oba',
+ 'fov': 'Pionowe pole widzenia',
+ 'veins': 'Blask żył z kolorem',
+ 'touch': 'Sterowanie mobilne',
+ 'debug': 'Polecenia deweloperskie',
+ 'menu_labels': 'Nazwy pozycji menu głównego',
+ 'subtitles': 'Rozmiar napisów',
+ 'text': 'Rozmiar tekstu',
+ 'contrast': 'Tło statystyk i ilości koloru',
+ 'menu_button': 'Pokaż przycisk menu',
+ 'action_button': 'Pokaż przycisk akcji',
+ 'body_button': 'Pokaż przycisk serc',
+ 'reflections': 'Odbicia',
+ 'gyro_invert_v': 'Odwróć pion żyroskopu'}
+assert TEXTS["pl"].keys() == TEXTS["en"].keys()
+
 
 class Slider:
     """A title, a slider and its value. kind "range": lo..hi in steps (an
@@ -149,7 +197,8 @@ class Radios:
 class Check:
     """A check box with its caption: the setting is on (checked) or off."""
     def __init__(self, key, caption, default, on="1", off="0"):
-        self.key, self.caption, self.default, self.on, self.off = key, caption, default, on, off
+        self.key, self.caption, self.default, self.on, self.off = key, textwrap.fill(
+            caption, 20, break_long_words=False, break_on_hyphens=False), default, on, off
 
 
 def pages(t):
@@ -206,6 +255,42 @@ RADIO_STEP = 270
 # in the menu's units of 1/1200 of its height.
 ARROW = dict(y=128, scale=1.0, inset=12, width=256)
 ARROW_IMAGES = ("ui/port_arrow_left", "ui/port_arrow_right")
+DESIGN_WIDTH = 1200 * 16 / 9
+
+
+def menu_scale_slot(module):
+    methods = {m["code_offset"] for c in module.contexts for m in c["methods"]
+               if (m["name"], m["args"]) == ("createLabel", 4)}
+    assert len(methods) == 1, "the original label factory"
+    slots = {r["register"] for r in function_rows(module, methods.pop()) if r["opcode"] == 14}
+    assert len(slots) == 1, "the original menu scale"
+    slot = slots.pop()
+    assert module.types[slot] == 2
+    return slot
+
+
+def fit_menu_width(module):
+    from patch_readability import replace, scratch
+    slot = menu_scale_slot(module)
+    stores = [r for r in module.instructions() if r.get("opcode") == 13 and r["operands"] == [slot]]
+    assert len(stores) == 2, "menu initialization and setParam"
+    frames = []
+    for row in stores:
+        base, frame = scratch(module, row["offset"], 3)
+        frames.append(frame)
+        a = Assembler(module)
+        a.global_(base + 1, "Width")
+        a.emit(2, base + 2, F32(DESIGN_WIDTH))
+        a.emit(39, base + 1)
+        a.move(row["register"], base)
+        a.emit(50, base)
+        a.emit(55, base, "keep")
+        a.move(base + 1, row["register"])
+        a.label("keep")
+        a.raw(module.code[row["offset"]:row["offset"] + row["size"]])
+        a.clear(base, base + 1, base + 2)
+        replace(module, row, a)
+    return dict(stores=[hex(r["offset"]) for r in stores], frames=frames)
 
 
 def arrow_position(a, side):
@@ -213,9 +298,9 @@ def arrow_position(a, side):
     a.global_(5, "!vec2")
     a.global_(6, "Width")
     a.emit(17, 6)
-    a.global_(7, "Height")
+    a.emit(14, menu_scale_slot(a.module), 7)
     a.emit(39, 6)
-    a.integer(7, 600 if side else -600)
+    a.emit(2, 7, F32(0.5 if side else -0.5))
     a.emit(38, 6)
     a.integer(7, -ARROW["width"] - ARROW["inset"] if side else ARROW["inset"])
     a.emit(36, 6)
@@ -226,6 +311,11 @@ def arrow_position(a, side):
 
 class Asm(Assembler):
     """The Assembler with the menu's calling patterns; pool strings shared."""
+    def emit(self, op, reg=0, *args):
+        if op == 14 and reg == 17 and self.module.legacy:
+            reg = 11
+        return super().emit(op, reg, *args)
+
     def pool(self, text, wide=False):
         cache = self.module.__dict__.setdefault("pool_cache", {})
         if (text, wide) not in cache:
@@ -282,6 +372,10 @@ class Asm(Assembler):
         self.emit(75, 1, 0)
 
     def label_text(self, text, x, y, size):
+        if "\n" in text:
+            for line, value in enumerate(text.splitlines()):
+                self.label_text(value, x, y - 50 * line, size)
+            return len(text.splitlines())
         self.call_begin(0, "createLabel")
         self.string(3, text)
         self.vec2(4, x, y)
@@ -292,6 +386,7 @@ class Asm(Assembler):
         self.integer(6, -{1: 18, 2: 26, 3: 40}[size])
         self.native(0, 5)
         self.emit(78, 1, 0x30002, 0x4)
+        return 1
 
     def get_check(self, dest, index):
         """r(dest) = controls.getCheckBoxState(index) (uses dest+1 .. dest+3)."""
@@ -494,8 +589,7 @@ def build_ctor(module, s, page, ctx, others):
         check_pitch = 100 if long_column else CHECK_PITCH
         for row in column:
             if isinstance(row, Slider):
-                a.label_text(row.title, x, y, 3)
-                labels += 1
+                labels += a.label_text(row.title, x, y, 3)
                 a.call_begin(0, "createSlider")
                 a.vec2(3, x + 78, y - 34)
                 slider_value(a, row, f"init{sliders}")
@@ -527,8 +621,7 @@ def build_ctor(module, s, page, ctx, others):
                     row.checks.append((checks, value))
                     a.add_action(s.opt_ctx, page["first_action"] + checks)
                     checks += 1
-                    a.label_text(caption, bx + 184, y - 31 - 117, 2)
-                    labels += 1
+                    labels += a.label_text(caption, bx + 184, y - 31 - 117, 2)
                 y -= RADIO_PITCH
             else:
                 cx = x if x == LEFT_X else x + 40
@@ -546,8 +639,7 @@ def build_ctor(module, s, page, ctx, others):
                 row.check = checks
                 a.add_action(s.opt_ctx, page["first_action"] + checks)
                 checks += 1
-                a.label_text(row.caption, cx + 184, y - 117, 2)
-                labels += 1
+                labels += a.label_text(row.caption, cx + 184, y - 117, 2)
                 y -= check_pitch
     # The values' labels: the page's apply writes them (and the same settings).
     a.emit(64, 2, 0)
@@ -831,8 +923,6 @@ def build_click(module, s, page, ctors, contexts):
 
 
 def patch_options(module, lang):
-    if module.legacy:
-        return dict(sites=[])
     texts = TEXTS.get(lang, TEXTS["en"])
     s = Sites(module)
     original = bytes(module.code)
@@ -910,6 +1000,8 @@ def patch_options(module, lang):
     a.raw(original[at:at + 8])
     a.emit(54, 0, at + 8)
     jump(at, inline(module, a))
+    viewport_scale_sites = fit_menu_width(module)
     return dict(tabs=hex(s.tabs), handler=hex(s.handler), contexts=ctx, constructors=[hex(c) for c in ctor],
                 clicks=[hex(c) for c in click], applies=[hex(c) for c in apply_], defaults=[hex(c) for c in default],
-                sites=[hex(x) for x in sites])
+                sites=[hex(x) for x in sites] + viewport_scale_sites["stores"] + viewport_scale_sites["frames"],
+                viewport_scale_sites=viewport_scale_sites["stores"])

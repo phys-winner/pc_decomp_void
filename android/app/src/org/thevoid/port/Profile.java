@@ -13,6 +13,18 @@ import java.util.Map;
 final class Profile {
     private Profile() { }
 
+    /** Two installed games keep their profiles; migration is only within one game generation. */
+    static void migrateGame(File fromGame, File toGame, String profile) throws IOException {
+        File original = fromGame;
+        if (!ScriptOverrides.file(original, "data/info.xml").isFile()) {
+            java.util.List<File> copies = Launcher.copies(original);
+            if (copies.size() != 1) return;
+            original = copies.get(0);
+        }
+        if (!new GameActivity.Release(original).library.equals(new GameActivity.Release(toGame).library)) return;
+        migrate(new File(fromGame, profile), new File(toGame, profile));
+    }
+
     /** Move the old shared profile into the chosen installation; existing destination files win. */
     static void migrate(File from, File to) throws IOException {
         if (java.nio.file.Files.isSymbolicLink(from.toPath()) || java.nio.file.Files.isSymbolicLink(to.toPath()))

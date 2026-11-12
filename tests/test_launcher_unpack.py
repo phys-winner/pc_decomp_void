@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 JAVA_HOME = Path(os.environ.get("JAVA_HOME", ""))
 SEVEN_ZIP = Path(os.environ["ProgramFiles"]) / "7-Zip/7z.exe"
 OUT = ROOT / "build/launcher-test/cases"
-SOURCES = ["Zip.java", "Deflate64.java", "Unpacker.java"]
+SOURCES = ["Zip.java", "Deflate64.java", "WorkProgress.java", "Unpacker.java"]
 INFO = '<?xml version="1.0" encoding="utf-8"?>\n<Info Title="Тургор: Голос Цвета - Test" EngTitle="Turgor" />\n'
 LANGUAGES = '<FileSystems><FileSystem Name="Russian" /></FileSystems>\n'
 

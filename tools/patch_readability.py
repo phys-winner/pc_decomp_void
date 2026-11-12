@@ -59,11 +59,16 @@ def patch_fonts(module, lang, subtitle=False):
                         if subtitle and m['name'] in ('loadDialogueFont', 'loadFontScaled')}
     label_methods = {m['code_offset'] for c in module.contexts for m in c['methods']
                      if (m['name'], m['args']) in (('createLabel', 4), ('setLabelText', 2))}
+    hint_methods = {m['code_offset'] for c in module.contexts for m in c['methods'] if m['name'] == 'getActiveButton'}
     fixed_labels = []
     for i, row in enumerate(original_rows):
         if not row.get('text', '').startswith('fontmain_'):
             continue
         text, reg = row['text'], row['register']
+        if text == 'fontmain_' and frame_at(module, row['offset'])['offset'] in hint_methods:
+            pool = Assembler(module).pool('portfont_', True)
+            module.code[row['offset'] + 8:row['offset'] + 12] = p32(pool)
+            sites.append(hex(row['offset']))
         key = 'PortSubtitleSize' if frame_at(module, row['offset'])['offset'] in subtitle_methods else 'PortTextSize'
         # Subtitle.loadFontScaled has its own supported-size formatter, after
         # multiplying by the screen scale. Its result is a string, not a size.
@@ -109,8 +114,10 @@ def patch_fonts(module, lang, subtitle=False):
             a.move(size, base)
             a.integer(base + 1, 28)
             a.emit(50, base)
-            a.emit(55, base, 'label_ready')
+            a.emit(55, base, 'port_font')
             a.integer(size, 28)
+            a.label('port_font')
+            a.string(reg, 'portfont_')
             a.emit(54, 0, 'label_ready')
             a.label('scaled_label')
             a.raw(module.code[site['offset']:site['offset'] + 8])

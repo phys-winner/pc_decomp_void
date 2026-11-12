@@ -41,7 +41,10 @@ JAVA = Path(os.environ.get("JAVA_HOME", "")) / "bin"
 ANDROID = Path(os.environ.get("ANDROID_SDK", os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or Path.home() / "AppData/Local/Android/Sdk")) / "platforms/android-36/android.jar"
 OUT = ROOT / "build/debug-command-test"
 OUT.mkdir(parents=True, exist_ok=True)
-sources = sorted((ROOT / "android/app/src").rglob("*.java"))
+from build_game_apk import prepare_launcher, ANDROID_JAR
+ANDROID = ANDROID_JAR
+prepared = prepare_launcher(OUT / "launcher")
+sources = sorted((ROOT / "android/app/src").rglob("*.java")) + [Path(p) for p in prepared["sources"]]
 subprocess.run([str(JAVA / "javac.exe"), "--release", "8", "-encoding", "UTF-8", "-cp", str(ANDROID), "-d", str(OUT),
                 *map(str, sources), str(ROOT / "tests/DebugCommandsTest.java")], check=True)
 subprocess.run([str(JAVA / "java.exe"), "-ea", "-cp", os.pathsep.join((str(OUT), str(ANDROID))),

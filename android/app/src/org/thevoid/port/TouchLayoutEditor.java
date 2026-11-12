@@ -153,9 +153,7 @@ final class TouchLayoutEditor extends FrameLayout {
     }
 
     private static String text(String en, String ru, String de, String pl) {
-        String game = Settings.gameLanguage.toLowerCase(Locale.ROOT);
-        String lang = game.startsWith("russian") ? "ru" : game.startsWith("german") ? "de"
-            : game.startsWith("polish") ? "pl" : game.startsWith("english") ? "en" : Locale.getDefault().getLanguage();
+        String lang = Settings.language();
         return "ru".equals(lang) || "uk".equals(lang) || "be".equals(lang) ? ru
             : "de".equals(lang) ? de : "pl".equals(lang) ? pl : en;
     }

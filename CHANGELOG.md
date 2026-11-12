@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5-dev — 2026-11-12
+
+- Added the shared launcher with separate The Void/Tension cards, folders,
+  Play/Return state and animated game-specific palettes.
+- Added independent opening-video switches and migration of existing paths,
+  FPS limits and intro choices; profiles cannot migrate between game generations.
+- Added Tension's three in-game port-settings pages, four-language port text
+  and Unicode label fonts without changing the distribution's original dialogue.
+- Fitted menus and hit regions to narrow screens; wrapped long captions and
+  anchored page arrows to the viewport edges.
+- Fixed black developer-command text on black backgrounds by applying one
+  explicit dark Material theme to all command dialogs, lists and manual input.
+- Improved preparation progress, texture status, speed/ETA and copyable diagnostics.
+- Applied the large-address-space choice to both runtimes with matching PE flags
+  and Win32 memory reports. Fixed zeroing of reused 16 KiB host subpages and
+  reservation rollback; retained overflow and inaccessible-range checks.
+- Protected extracted native libraries before loading for modern Android targets.
+- Kept versionCode 8 and the existing APK signing certificate. Package checks,
+  focused regressions and selected-device dialog tests passed. No full campaign
+  or comprehensive save/load acceptance is claimed; Tension transfers 23/24 remain open.
+
 ## 0.4-dev — 2026-11-07
 
 - Команды разработчика The Void распределены по восьми категориям.

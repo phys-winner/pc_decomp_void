@@ -36,14 +36,29 @@ static uint32_t page_alloc[PAGES];     /* allocation base (VA >> 12), 0 if free 
 static uint16_t alloc_protect[PAGES];  /* initial protection, valid at the base */
 static uint8_t granule_used[GRANULES];
 static pthread_mutex_t vm_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t guest_user_top = GUEST_USER_TOP;
 /* Guest pages are 4 KiB; the host's may be larger (16 KiB kernels: Pixel
  * phones with Android 15 and later). mprotect and madvise take whole host
  * pages, so a host page carries the most open protection of the guest
  * pages in it, and is only discarded when none of them stays committed. */
 static uint32_t host_page = 4096;
 
+uint32_t void_vm_user_top(void) { return guest_user_top; }
+
+uint32_t void_vm_available(void)
+{
+    uint32_t free_granules = 0;
+    pthread_mutex_lock(&vm_lock);
+    for (uint32_t g = 1; g < (guest_user_top >> 16); ++g) free_granules += !granule_used[g];
+    pthread_mutex_unlock(&vm_lock);
+    return free_granules << 16;
+}
+
 int void_guest_reserve(void)
 {
+    const char *large_address = getenv("PORT_OPTION_LARGE_ADDRESS_AWARE");
+    guest_user_top = large_address && (!strcmp(large_address, "1") || !strcmp(large_address, "true"))
+        ? 0xFFFE0000u : 0x7FFE0000u;
     void *want = (void *)(uintptr_t)VOID_GUEST_BASE;
     void *got = mmap(want, VOID_GUEST_SPAN, PROT_NONE,
         MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -66,7 +81,7 @@ int void_guest_reserve(void)
     /* Synthetic thunk VAs: reserved, never accessible. */
     for (uint32_t g = GUEST_THUNK_BASE >> 16; g < (GUEST_THUNK_LIMIT >> 16); ++g) granule_used[g] = 1;
     /* Everything above the user top stays unavailable. */
-    for (uint32_t g = GUEST_USER_TOP >> 16; g < GRANULES; ++g) granule_used[g] = 1;
+    for (uint32_t g = guest_user_top >> 16; g < GRANULES; ++g) granule_used[g] = 1;
     void_log("[void] guest window %p..%p reserved", want, (void *)((uintptr_t)want + VOID_GUEST_SPAN));
     return 1;
 }
@@ -94,7 +109,7 @@ static int valid_protect(uint32_t protect)
 
 static int valid_vm_range(uint32_t address, uint32_t size)
 {
-    if (address >= GUEST_USER_TOP || (uint64_t)address + size > GUEST_USER_TOP) {
+    if (address >= guest_user_top || (uint64_t)address + size > guest_user_top) {
         void_set_last_error(ERROR_INVALID_ADDRESS_);
         return 0;
     }
@@ -103,9 +118,9 @@ static int valid_vm_range(uint32_t address, uint32_t size)
 
 static uint32_t find_free(uint32_t size, int top_down)
 {
-    uint32_t need = (size + GUEST_GRANULARITY - 1) / GUEST_GRANULARITY;
+    uint32_t need = (uint32_t)(((uint64_t)size + GUEST_GRANULARITY - 1) / GUEST_GRANULARITY);
     if (!need) return 0;
-    uint32_t limit = GUEST_USER_TOP >> 16;
+    uint32_t limit = guest_user_top >> 16;
     if (top_down) {
         uint32_t run = 0;
         for (uint32_t g = limit; g-- > 1;) {
@@ -162,28 +177,62 @@ static int apply_prot(uint32_t first, uint32_t last)
 /* Commit guest pages [first, last] with a protection; undone on failure. */
 static int commit_pages(uint32_t first, uint32_t last, uint32_t protect, uint32_t base_page, int set_base)
 {
+    struct prior_page { uint16_t protect; uint8_t state; };
+    struct prior_page *before = malloc((size_t)(last - first + 1) * sizeof *before);
+    if (!before) { void_set_last_error(ERROR_NOT_ENOUGH_MEMORY_); return 0; }
     for (uint32_t p = first; p <= last; ++p) {
+        before[p - first] = (struct prior_page){ page_protect[p], page_state[p] };
         page_state[p] = ST_COMMIT;
-        page_protect[p] = (uint16_t)protect;
+        if (before[p - first].state != ST_COMMIT) page_protect[p] = PAGE_READWRITE_;
         if (set_base) page_alloc[p] = base_page;
     }
-    if (apply_prot(first, last)) return 1;
-    for (uint32_t p = first; p <= last; ++p) { page_state[p] = ST_RESERVE; page_protect[p] = 0; }
-    apply_prot(first, last);
-    return 0;
+    int ok = apply_prot(first, last);
+    if (ok) {
+        /* Whole host pages are demand-zero; only reused subpages need an explicit clear. */
+        uint32_t per = host_page / GUEST_PAGE;
+        for (uint32_t p = first; per > 1 && p <= last; ++p) if (before[p - first].state != ST_COMMIT) {
+            int shared = 0;
+            for (uint32_t q = p / per * per, end = q + per; q < end; ++q)
+                shared |= (q >= first && q <= last ? before[q - first].state : page_state[q]) == ST_COMMIT;
+            if (shared) memset(GPTR(p << 12), 0, GUEST_PAGE);
+        }
+        for (uint32_t p = first; p <= last; ++p) page_protect[p] = (uint16_t)protect;
+        ok = apply_prot(first, last);
+    }
+    if (!ok) {
+        for (uint32_t p = first; p <= last; ++p) {
+            page_state[p] = before[p - first].state;
+            page_protect[p] = before[p - first].protect;
+        }
+        if (!apply_prot(first, last)) void_fatal("cannot restore guest protection after failed commit");
+    }
+    free(before);
+    return ok;
 }
 
 /* Reserve [address, address+size) as one allocation. Caller holds vm_lock. */
 static int reserve_exact(uint32_t address, uint32_t size, uint32_t protect)
 {
     uint32_t g0 = address >> 16, g1 = (uint32_t)(((uint64_t)address + size + GUEST_GRANULARITY - 1) >> 16);
-    if ((address & (GUEST_GRANULARITY - 1)) || g1 > (GUEST_USER_TOP >> 16) || g1 <= g0) return 0;
+    if ((address & (GUEST_GRANULARITY - 1)) || g1 > (guest_user_top >> 16) || g1 <= g0) return 0;
     for (uint32_t g = g0; g < g1; ++g) if (granule_used[g]) return 0;
     for (uint32_t g = g0; g < g1; ++g) granule_used[g] = 1;
-    uint32_t pages = (size + GUEST_PAGE - 1) / GUEST_PAGE;
+    uint32_t pages = (uint32_t)(((uint64_t)size + GUEST_PAGE - 1) / GUEST_PAGE);
     set_pages(address >> 12, pages, ST_RESERVE, 0, address >> 12);
     alloc_protect[address >> 12] = (uint16_t)protect;
     return 1;
+}
+
+/* A failed commit must not leak the reservation into later allocation scans. */
+static void release_reservation(uint32_t address, uint32_t size)
+{
+    size_t page = host_page, span = ((size_t)size + page - 1) & ~(page - 1);
+    if (mmap(GPTR(address), span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE, -1, 0) == MAP_FAILED)
+        void_fatal("cannot restore guest reservation after failed commit: %s", strerror(errno));
+    set_pages(address >> 12, size >> 12, ST_FREE, 0, 0);
+    alloc_protect[address >> 12] = 0;
+    uint32_t end = (uint32_t)(((uint64_t)address + size + GUEST_GRANULARITY - 1) >> 16);
+    for (uint32_t g = address >> 16; g < end; ++g) granule_used[g] = 0;
 }
 
 uint32_t void_vm_alloc(uint32_t address, uint32_t size, uint32_t type, uint32_t protect)
@@ -210,6 +259,7 @@ uint32_t void_vm_alloc(uint32_t address, uint32_t size, uint32_t type, uint32_t 
         }
         if (type & MEM_COMMIT_) {
             if (!commit_pages(base >> 12, (base >> 12) + (span >> 12) - 1, protect, base >> 12, 1)) {
+                release_reservation(base, span);
                 pthread_mutex_unlock(&vm_lock);
                 return 0;
             }
@@ -238,10 +288,12 @@ uint32_t void_vm_alloc(uint32_t address, uint32_t size, uint32_t type, uint32_t 
 
 int void_vm_claim(uint32_t address, uint32_t size, uint32_t protect)
 {
+    if (!size || !valid_protect(protect) || !valid_vm_range(address, size)) return 0;
     pthread_mutex_lock(&vm_lock);
     uint32_t span = (size + GUEST_PAGE - 1) & ~(GUEST_PAGE - 1);
-    int ok = reserve_exact(address, span, protect) &&
-             commit_pages(address >> 12, (address >> 12) + (span >> 12) - 1, protect, address >> 12, 1);
+    int reserved = reserve_exact(address, span, protect);
+    int ok = reserved && commit_pages(address >> 12, (address >> 12) + (span >> 12) - 1, protect, address >> 12, 1);
+    if (!ok && reserved) release_reservation(address, span);
     pthread_mutex_unlock(&vm_lock);
     return ok;
 }
@@ -322,23 +374,35 @@ int void_vm_protect(uint32_t address, uint32_t size, uint32_t protect, uint32_t 
 
 uint32_t void_vm_query(uint32_t address, uint32_t info)
 {
+    if (address >= guest_user_top || !void_vm_writable(info, 28)) { void_set_last_error(ERROR_INVALID_PARAMETER_); return 0; }
     pthread_mutex_lock(&vm_lock);
     uint32_t page = address >> 12;
     uint8_t state = page_state[page];
     uint32_t base_page = page_alloc[page];
     uint16_t protect = page_protect[page];
+    uint32_t limit = guest_user_top >> 12;
     uint32_t p = page;
-    while (p < PAGES && page_state[p] == state && page_alloc[p] == base_page && page_protect[p] == protect) ++p;
-    uint32_t region = (p - page) << 12;
-    if (state == ST_FREE) {
-        /* A free region extends to the next allocated page. */
-        p = page;
-        while (p < PAGES && page_state[p] == ST_FREE) ++p;
-        region = (p - page) << 12;
+    int thunk = page >= (GUEST_THUNK_BASE >> 12) && page < (GUEST_THUNK_LIMIT >> 12);
+    if (thunk) {
+        /* Query-only metadata: keep synthetic thunks unavailable to guest VM mutations. */
+        state = ST_RESERVE;
+        base_page = GUEST_THUNK_BASE >> 12;
+        protect = 0;
+        p = GUEST_THUNK_LIMIT >> 12;
+        if (p > limit) p = limit;
+    } else {
+        if (page < (GUEST_THUNK_BASE >> 12) && limit > (GUEST_THUNK_BASE >> 12)) limit = GUEST_THUNK_BASE >> 12;
+        while (p < limit && page_state[p] == state && page_alloc[p] == base_page && page_protect[p] == protect) ++p;
+        if (state == ST_FREE) {
+            /* A free region extends to the next allocation or the thunk hole. */
+            p = page;
+            while (p < limit && page_state[p] == ST_FREE) ++p;
+        }
     }
+    uint32_t region = (p - page) << 12;
     MEM32(info + 0) = page << 12;                                    /* BaseAddress */
     MEM32(info + 4) = state == ST_FREE ? 0 : base_page << 12;        /* AllocationBase */
-    MEM32(info + 8) = state == ST_FREE ? 0 : alloc_protect[base_page]; /* AllocationProtect */
+    MEM32(info + 8) = state == ST_FREE ? 0 : thunk ? PAGE_NOACCESS_ : alloc_protect[base_page]; /* AllocationProtect */
     MEM32(info + 12) = region;                                       /* RegionSize */
     MEM32(info + 16) = state == ST_FREE ? 0x10000u : state == ST_RESERVE ? MEM_RESERVE_ : MEM_COMMIT_;
     MEM32(info + 20) = state == ST_COMMIT ? protect : 0;             /* Protect */
@@ -350,7 +414,7 @@ uint32_t void_vm_query(uint32_t address, uint32_t info)
 /* MapViewOfFile: a fresh reservation with the file mapped over it. */
 uint32_t void_vm_map_file(int fd, uint64_t offset, uint32_t size, int writable, int shared)
 {
-    if (!size) return 0;
+    if (!size || size > guest_user_top) return 0;
     pthread_mutex_lock(&vm_lock);
     uint32_t span = (size + GUEST_PAGE - 1) & ~(GUEST_PAGE - 1);
     uint32_t base = find_free(span, 0);

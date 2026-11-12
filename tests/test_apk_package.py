@@ -1,4 +1,5 @@
 """Check the full APK, its asset indices and lossless native-library stripping."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -38,9 +39,15 @@ def elf(data):
 
 
 def main():
-    paths = [arg for arg in sys.argv[1:] if arg != "--no-publish"]
-    assert len(paths) <= 1, "expected at most one APK path"
-    path = Path(paths[0]) if paths else OUT / "the-void.apk"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("apk", nargs="?", type=Path, default=OUT / "the-void.apk")
+    parser.add_argument("--no-publish", action="store_true")
+    parser.add_argument("--base-apk", type=Path, help="verify reused native/shader assets against this signed APK")
+    args = parser.parse_args()
+    path = args.apk
+    baseline = zipfile.ZipFile(args.base_apk) if args.base_apk else None
+    if baseline is not None:
+        run(TOOLS / "apksigner.bat", "verify", "--verbose", args.base_apk)
     manifest = ET.parse(ROOT / "android/app/AndroidManifest.xml").getroot()
     ns = "{http://schemas.android.com/apk/res/android}"
     version, code = manifest.get(ns + "versionName"), manifest.get(ns + "versionCode")
@@ -58,10 +65,15 @@ def main():
         assert apk.read("assets/licenses/GPL-3.0.txt") == (ROOT / "LICENSE").read_bytes()
         assert apk.read("assets/licenses/THIRD_PARTY_NOTICES.md") == (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes()
         cached = {line.split()[0] for line in apk.read("assets/shadercache/index.txt").decode().splitlines() if line.strip()}
-        for label, key, _ in shaders():
-            assert key + ".bin" in cached, "missing required shader: " + label + " (" + key + ")"
-        for label, key, _ in shaders("research/vfs-index.polish.json"):
-            assert key + ".bin" in cached, "missing required Tension shader: " + label + " (" + key + ")"
+        if baseline is not None:
+            for name in baseline.namelist():
+                if name.startswith(("assets/native/", "assets/lifted/", "assets/lifted-tension/", "assets/shader", "lib/")):
+                    assert apk.read(name) == baseline.read(name), "reused payload differs: " + name
+        else:
+            for label, key, _ in shaders():
+                assert key + ".bin" in cached, "missing required shader: " + label + " (" + key + ")"
+            for label, key, _ in shaders("research/vfs-index.polish.json"):
+                assert key + ".bin" in cached, "missing required Tension shader: " + label + " (" + key + ")"
         libraries = {"libvoid.so": "arm64", "libvoid_tension.so": "arm64-tension"}
         # lib/ holds the unpacker and the texture converter; the game libraries are xz streams in assets/native.
         assert {n for n in names if n.startswith("lib/")} == {"lib/arm64-v8a/libvoidxz.so", "lib/arm64-v8a/libtexconv.so"}
@@ -100,7 +112,7 @@ def main():
                 offset += packed_size
             unpacked = b"".join(decoded)
             assert (len(unpacked), hashlib.sha256(unpacked).hexdigest()) == index[name], "unpacked " + name
-            original = elf((ROOT / "build" / folder / name).read_bytes())
+            original = elf((ROOT / "build" / folder / name).read_bytes()) if baseline is None else None
             shipped = elf(unpacked)
             strings = shipped[".dynstr"][2]
             for symbol in struct.iter_unpack("<IBBHQQ", shipped[".dynsym"][2]):
@@ -111,7 +123,8 @@ def main():
             assert ".symtab" not in shipped and ".strtab" not in shipped, name
             assert not any(s.startswith(".debug") for s in shipped), name
             allocated = lambda sections: {n: s for n, s in sections.items() if s[0][1] & 2}
-            assert allocated(original) == allocated(shipped), "stripping changed loadable sections: " + name
+            if original is not None:
+                assert allocated(original) == allocated(shipped), "stripping changed loadable sections: " + name
             tags = dict(struct.iter_unpack("<qQ", shipped[".dynamic"][2]))
             assert 0x60000011 in tags and 0x60000012 in tags, "missing Android packed RELA"
             assert not ({35, 36, 37, 0x6fffe000} & tags.keys()), "RELR needs a newer Android API"

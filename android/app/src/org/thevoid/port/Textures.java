@@ -22,15 +22,15 @@ final class Textures {
     static final int ETC2 = 1, ASTC = 2;
     static final int IDLE = 0, SCANNING = 1, CONVERTING = 2, FINISHING = 3, DONE = 4, FAILED = 5, CANCELLED = 6;
 
-    private static native long[] nativeScan(String game);
-    private static native int nativeConvert(String game, int format, int threads);
-    private static native int nativeRemove(String game);
-    private static native void nativeCancel();
-    private static native long[] nativeProgress();
-    private static native String nativeMessage();
+    static native long[] nativeScan(String game);
+    static native int nativeConvert(String game, int format, int threads);
+    static native int nativeRemove(String game);
+    static native void nativeCancel();
+    static native long[] nativeProgress();
+    static native String nativeMessage();
 
     private static Boolean loaded;
-    private static final Object nativeOperation = new Object();
+    static final Object nativeOperation = new Object();
 
     static synchronized boolean available() {
         if (loaded == null) {
@@ -150,6 +150,7 @@ final class Textures {
         final File game;
         final int format;             /* ETC2, ASTC, or 0: remove the conversion */
         final long started = System.currentTimeMillis();
+        final WorkProgress meter = new WorkProgress();
         volatile boolean finished, cancelled;
         volatile String failure;      /* null: done or stopped (see cancelled) */
         volatile long[] last = {IDLE, 0, 0, 0, 0};

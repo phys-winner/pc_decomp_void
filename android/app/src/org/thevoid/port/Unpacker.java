@@ -209,7 +209,8 @@ final class Unpacker {
         final boolean created;   /* the target is a new folder, removed again on failure */
         final String source;     /* the archive (the launcher's document), offered for deletion after */
         final File sourceFile;   /* the same as a file, if known */
-        volatile long done;
+        volatile long done, itemsDone;
+        final WorkProgress meter = new WorkProgress();
         volatile String file = "";
         volatile boolean cancelled, finished;
         volatile Failure failure;
@@ -271,6 +272,7 @@ final class Unpacker {
                 }
                 if (cancelled) throw new Failure(CANCELLED, null);
                 if (written != e.size || crc.getValue() != e.crc) throw new Failure(CORRUPT, path);
+                ++itemsDone;
             }
             /* Into place: the target held nothing (or was new). */
             String[] items = temp.list();

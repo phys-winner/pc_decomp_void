@@ -158,7 +158,7 @@ public final class FilenameProbe {
 '''
     file = OUT / "FilenameProbe.java"
     file.write_text(probe, encoding="utf-8")
-    sources = [APP / name for name in ("Zip.java", "Unpacker.java", "Deflate64.java")]
+    sources = [APP / name for name in ("Zip.java", "Unpacker.java", "Deflate64.java", "WorkProgress.java")]
     run([JAVA / "javac.exe", "--release", "8", "-encoding", "UTF-8", "-d", OUT / "zip", *sources, file], "zip-build")
     run([JAVA / "java.exe", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-ea", "-cp", OUT / "zip", "org.thevoid.port.FilenameProbe", archive], "zip-run")
 

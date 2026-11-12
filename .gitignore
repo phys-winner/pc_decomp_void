@@ -95,3 +95,8 @@ AGENTS.md
 # Pinned upstream encoder submodules.
 !/reference/astcenc/
 !/reference/etcpak/
+
+# Public launcher specification and the build-time launcher source snapshot.
+!/android/port.json
+!/android/launcher/README.md
+!/android/launcher/tools/*.py

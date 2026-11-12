@@ -49,7 +49,8 @@ public final class UnpackService extends Service {
             }
             long size = Math.max(1, job.plan.size);
             builder.setProgress(1000, (int) (job.done * 1000 / size), false)
-                .setContentText(Launcher.progressText(job.done, job.plan.size));
+                .setContentText(job.meter.describe(java.util.Locale.getDefault().getLanguage(), false, job.done, job.plan.size,
+                    job.itemsDone, job.plan.files.size()).replace('\n', ' '));
             notifications.notify(PROGRESS, builder.build());
             handler.postDelayed(this, 1000);
         }

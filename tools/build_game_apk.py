@@ -33,8 +33,67 @@ from toolchain import SDK, JAVA_HOME, ADB
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = SDK / "build-tools/36.1.0"
-ANDROID_JAR = SDK / "platforms/android-36/android.jar"
+ANDROID_JAR = SDK / "platforms/android-37.0/android.jar"
 OUT = ROOT / "build/android-game"
+
+
+def prepare_launcher(out):
+    candidates = [Path(os.environ["PORT_LAUNCHER"])] if os.environ.get("PORT_LAUNCHER") else []
+    candidates += [ROOT / "android/launcher", ROOT.parent / "launcher"]
+    base = next((p for p in candidates if (p / "tools/launcher.py").is_file()), None)
+    if base is None:
+        raise SystemExit("Set PORT_LAUNCHER to the shared launcher checkout")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("port_launcher", base / "tools/launcher.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.prepare(ROOT / "android/port.json", ROOT / "android/app/AndroidManifest.xml", out)
+
+
+def compile_ui(out):
+    prepared = prepare_launcher(out / "launcher")
+    (out / "classes").mkdir(parents=True, exist_ok=True)
+    (out / "dex").mkdir(exist_ok=True)
+    run(TOOLS / "aapt2.exe", "compile", "--dir", ROOT / "android/app/res", "-o", out / "res.zip")
+    run(TOOLS / "aapt2.exe", "link", "-I", ANDROID_JAR, "--manifest", prepared["manifest"],
+        "-A", prepared["assets"], "-o", out / "base.apk", out / "res.zip")
+    sources = sorted((ROOT / "android/app/src").rglob("*.java")) + [Path(p) for p in prepared["sources"]]
+    run(JAVA_HOME / "bin/javac.exe", "--release", "8", "-encoding", "UTF-8", "-cp", ANDROID_JAR, "-d", out / "classes", *sources)
+    run(JAVA_HOME / "bin/jar.exe", "cf", out / "classes.jar", "-C", out / "classes", ".")
+    run(TOOLS / "d8.bat", "--lib", ANDROID_JAR, "--min-api", "26", "--output", out / "dex", out / "classes.jar", shell=False)
+
+
+def repackage_ui(base, out, keystore):
+    """Reuse a signed build's native payloads while rebuilding all Java and resources."""
+    if base.resolve() == (out / "the-void.apk").resolve():
+        raise SystemExit("--base-apk must be outside the output APK path")
+    out.mkdir(parents=True, exist_ok=True)
+    compile_ui(out)
+    run(sys.executable, "-B", ROOT / "tools/patch_scripts.py", "--menus-only")
+    with zipfile.ZipFile(base) as previous, zipfile.ZipFile(out / "base.apk") as resources, \
+            zipfile.ZipFile(out / "unsigned.apk", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as apk:
+        for entry in previous.infolist():
+            if (entry.filename.startswith(("META-INF/", "assets/overrides/", "assets/launcher/", "res/"))
+                    or entry.filename in ("classes.dex", "AndroidManifest.xml", "resources.arsc")):
+                continue
+            apk.writestr(entry, previous.read(entry))
+        for entry in resources.infolist():
+            apk.writestr(entry, resources.read(entry))
+        apk.write(out / "dex/classes.dex", "classes.dex")
+        for file in sorted((ROOT / "build/overrides").rglob("*")):
+            if file.is_file():
+                apk.write(file, "assets/overrides/" + file.relative_to(ROOT / "build/overrides").as_posix())
+    run(TOOLS / "zipalign.exe", "-f", "-P", "16", "4", out / "unsigned.apk", out / "aligned.apk")
+    result = out / "the-void.apk"
+    run(TOOLS / "apksigner.bat", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--key-pass", "pass:android",
+        "--out", result, out / "aligned.apk")
+    run(TOOLS / "apksigner.bat", "verify", "--verbose", result)
+    run(TOOLS / "zipalign.exe", "-c", "-P", "16", "4", result)
+    with zipfile.ZipFile(base) as previous, zipfile.ZipFile(result) as apk:
+        for name in previous.namelist():
+            if name.startswith(("assets/native/", "assets/lifted/", "assets/lifted-tension/", "lib/")):
+                assert previous.read(name) == apk.read(name), name
+    return result
 
 
 def run(*args, **kwargs):
@@ -151,6 +210,7 @@ def lifted_images(release):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--base-apk", type=Path, help="rebuild UI/scripts, preserve this APK's native payloads")
     parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL") or os.environ.get("VOID_SERIAL"))
     parser.add_argument("--skip-native", action="store_true")
     parser.add_argument("--no-publish", action="store_true", help="keep the test APK in build; do not copy it to pub")
@@ -177,6 +237,14 @@ def main():
     signer = resolve_debug_signer(JAVA_HOME / "bin/keytool.exe", ROOT)
     keystore = Path(signer["keystore"])
     print("Debug signer certificate SHA-256: " + signer["certificate_sha256"])
+    if args.base_apk:
+        if not args.no_publish:
+            parser.error("--base-apk requires --no-publish")
+        apk = repackage_ui(args.base_apk, OUT, keystore)
+        if args.install:
+            run(ADB, "-s", args.serial, "install", "-r", apk)
+        print(apk)
+        return
     modes = [(flag, name) for flag, name, on in (("--global-regs", "globalregs", args.global_regs),
                                                  ("--volatile-memory", "volatilemem", args.volatile_memory)) if on]
     want_2009 = args.release_only in (None, "void")
@@ -205,13 +273,7 @@ def main():
     (OUT / "classes").mkdir(parents=True)
     (OUT / "dex").mkdir()
     # Resources: the launcher's adaptive icon (android/app/res).
-    run(TOOLS / "aapt2.exe", "compile", "--dir", ROOT / "android/app/res", "-o", OUT / "res.zip")
-    run(TOOLS / "aapt2.exe", "link", "-I", ANDROID_JAR, "--manifest", ROOT / "android/app/AndroidManifest.xml",
-        "-o", OUT / "base.apk", OUT / "res.zip")
-    sources = sorted((ROOT / "android/app/src").rglob("*.java"))
-    run(JAVA_HOME / "bin/javac.exe", "--release", "8", "-cp", ANDROID_JAR, "-d", OUT / "classes", *sources)
-    classes = sorted((OUT / "classes").rglob("*.class"))
-    run(TOOLS / "d8.bat", "--lib", ANDROID_JAR, "--min-api", "26", "--output", OUT / "dex", *classes, shell=False)
+    compile_ui(OUT)
     # The port's patched game scripts (tools/patch_scripts.py): the activity
     # installs those made from the running release's originals.
     run(sys.executable, ROOT / "tools/patch_scripts.py")
